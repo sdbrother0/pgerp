@@ -1,0 +1,46 @@
+# PgERP и PostgreSQL 18: docker compose up -d → http://localhost:8080, вход admin / admin.
+# Настройки — переменными окружения или файлом .env рядом (см. ARCHITECTURE.md, «Развёртывание»).
+name: pgerp
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: erp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${ERP_DB_PASSWORD:-postgres}
+    volumes:
+      # PostgreSQL 18 хранит данные в /var/lib/postgresql/<версия>/docker — том монтируется на уровень выше
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Порт базы наружу не открыт; для psql с хоста раскомментируйте (5432 может быть занят другой базой)
+    # ports:
+    #   - "5433:5432"
+
+  app:
+    # ERP_DOCKERFILE=Dockerfile.native — нативный образ GraalVM вместо JVM
+    build:
+      context: .
+      dockerfile: ${ERP_DOCKERFILE:-Dockerfile}
+    image: pgerp:${ERP_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ERP_DB_URL: jdbc:postgresql://db:5432/erp
+      ERP_DB_USER: postgres
+      ERP_DB_PASSWORD: ${ERP_DB_PASSWORD:-postgres}
+      SERVER_SERVLET_CONTEXT_PATH: ${ERP_CONTEXT_PATH:-}
+      ERP_ALLOWED_ORIGINS: ${ERP_ALLOWED_ORIGINS:-}
+      ERP_MCP_ALLOWED_ORIGINS: ${ERP_MCP_ALLOWED_ORIGINS:-}
+    ports:
+      - "${ERP_PORT:-8080}:8080"
+
+volumes:
+  db-data:

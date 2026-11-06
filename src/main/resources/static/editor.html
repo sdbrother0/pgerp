@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title data-i18n>Form editor</title>
+	<link rel="stylesheet" href="css/app.css">
+	<!-- Тема — до отрисовки страницы -->
+	<script src="js/theme.js"></script>
+</head>
+<body>
+	<header class="topbar">
+		<a href="./" class="topbar-brand" aria-label="PgERP — home" data-i18n-attrs="aria-label"><span class="topbar-brand-pg">Pg</span>ERP</a>
+		<a id="mode-switch" class="topbar-mode" href="./" title="Switch to “Forms” mode" data-i18n data-i18n-attrs="title">Form editor</a>
+	</header>
+
+	<div class="shell">
+		<nav class="sidebar" aria-labelledby="forms-title">
+			<label class="erp-field sidebar-filter" title="Show forms, reports and the data schema of this solution only" data-i18n-attrs="title">
+				<span data-i18n>Solution</span>
+				<select id="solution-filter"></select>
+			</label>
+			<ul class="form-list sidebar-section">
+				<li>
+					<a id="solutions-link" href="editor.html?solutions" title="Application solutions: contents and releases (migrations)" data-i18n data-i18n-attrs="title">Solutions</a>
+					<ul id="solution-list" class="form-list sidebar-sublist"></ul>
+				</li>
+				<li><a id="schema-link" href="editor.html?schema" title="Tables and views: designer" data-i18n data-i18n-attrs="title">Data schema</a></li>
+				<li><a id="console-link" href="editor.html?console" title="SQL queries and action tests" data-i18n data-i18n-attrs="title">SQL console</a></li>
+				<li><a id="menu-link" href="editor.html?menu" title="Application menu items and the forms they open" data-i18n data-i18n-attrs="title">Menu</a></li>
+				<li>
+					<a id="reports-link" href="editor.html?reports" title="PDF reports: JasperReports templates and data functions" data-i18n data-i18n-attrs="title">Reports</a>
+					<ul id="report-list" class="form-list sidebar-sublist"></ul>
+				</li>
+				<li><a id="mcp-link" href="editor.html?mcp" title="MCP server for AI agents: address and tokens" data-i18n data-i18n-attrs="title">MCP access</a></li>
+			</ul>
+			<h3 id="forms-title" class="sidebar-title" data-i18n>Forms</h3>
+			<div id="forms"></div>
+		</nav>
+
+		<main id="form-editor" class="content editor">
+			<aside class="editor-palette" aria-labelledby="palette-title">
+				<h3 id="palette-title" data-i18n>Components</h3>
+				<div id="palette"></div>
+				<p class="editor-hint" data-i18n>Click to add a component after the selected one, or drag it to the right place in the form.</p>
+			</aside>
+
+			<section class="editor-canvas">
+				<div class="toolbar">
+					<span class="spacer"></span>
+					<span id="dirty" class="editor-dirty" title="There are unsaved changes" data-i18n data-i18n-attrs="title" hidden>● Not saved</span>
+					<button id="new-form" type="button" data-i18n>+ New form</button>
+					<button id="delete-form" type="button" class="danger" data-i18n>Delete form</button>
+					<a id="open-form" target="_blank" data-i18n>Open</a>
+					<button id="save-form" type="button" class="primary" data-i18n>Save</button>
+				</div>
+				<div id="preview" class="editor-preview"></div>
+			</section>
+
+			<aside id="props" class="editor-props" aria-label="Properties" data-i18n-attrs="aria-label"></aside>
+		</main>
+
+		<!-- Редактор меню (editor.html?menu): дерево пунктов | свойства выбранного -->
+		<main id="menu-editor" class="content editor menu-editor" hidden></main>
+
+		<!-- Редактор отчётов (editor.html?reports): список отчётов | шаблон jrxml -->
+		<main id="report-editor" class="content editor report-editor" hidden></main>
+
+		<!-- Решения (editor.html?solutions), схема данных (?schema), SQL-консоль (?console), доступ MCP (?mcp) -->
+		<main id="solution-editor" class="content editor report-editor" hidden></main>
+		<main id="schema-editor" class="content editor schema-editor" hidden></main>
+		<main id="sql-console" class="content editor report-editor" hidden></main>
+		<main id="mcp-access" class="content editor report-editor" hidden></main>
+	</div>
+
+	<datalist id="tab-names"></datalist>
+	<datalist id="folder-names"></datalist>
+
+	<script type="module">
+		import { applyInstructions, callAction, connectUiEvents, initSession, renderForm, renderFormFolders, showMessage } from './js/ui-runtime.js';
+		import { createMenuEditor } from './js/menu-editor.js';
+		import { openFunctionEditor } from './js/code-editor.js';
+		import { createReportEditor } from './js/report-editor.js';
+		import { openGridColumnsEditor } from './js/grid-columns-editor.js';
+		import { createSolutionEditor, solutionLabel } from './js/solution-editor.js';
+		import { createSchemaEditor } from './js/schema-editor.js';
+		import { createSqlConsole } from './js/sql-console.js';
+		import { createMcpAccess } from './js/mcp-access.js';
+		import { t, translatePage } from './js/i18n.js';
+
+		translatePage();
+
+		// Значок компонента в палитре
+		const ICONS = { label: 'Aa', input: '▭', date: '31', hidden: '◌', display: '≡', lookup: '…', combobox: '▾', button: '▶', grid: '▦', tree: '⋮', board: '▤', timer: '⏱', chart: '▟' };
+		const TYPES = {
+			label: t('Text'),
+			input: t('Input field'),
+			date: t('Date'),
+			hidden: t('Hidden field'),
+			display: t('Value (read-only)'),
+			lookup: t('Lookup field'),
+			combobox: t('Drop-down list'),
+			button: t('Button'),
+			grid: t('Table'),
+			tree: t('Tree'),
+			board: t('Cell board'),
+			timer: t('Timer'),
+			chart: t('Chart'),
+		};
+		// Подпись нового компонента — чтобы он сразу был виден в форме
+		const DEFAULT_LABELS = {
+			label: t('Text'), input: t('Field'), date: t('Date'), display: t('Value'), lookup: t('Lookup'), combobox: t('List'), button: t('Button'), grid: t('Table'), tree: t('Tree'), chart: t('Chart'),
+		};
+		const WITH_ACTION = ['button', 'grid', 'tree', 'lookup', 'combobox', 'timer', 'chart'];
+		// Без подписи и вкладки: не видны на форме
+		const INVISIBLE = ['hidden', 'timer'];
+		// Параметры компонента (options): [ключ, подпись, подсказка, число?]
+		const OPTION_FIELDS = {
+			input: [
+				['refresh', t('Table filter'), t('Name of a table or tree of the form: reloaded while typing, its source receives the field value')],
+				['type', t('Input type'), t('password — hidden password input')],
+			],
+			combobox: [
+				['placeholder', t('Empty item'), t('Text of the item without a value, e.g. “All groups”. Default: “Not selected”')],
+				['refresh', t('Refresh'), t('Name of a table, tree or list of the form: reloaded on selection')],
+			],
+			button: [['hotkey', t('Hotkey'), t('For example ArrowLeft, ArrowDown, Space, Enter, KeyP')]],
+			timer: [['interval', t('Interval, ms'), t('How often the action is called while the database keeps the timer on'), true]],
+			grid: [['page_size', t('Rows per page'), t('From 1 to 100; default 10'), true]],
+			chart: [
+				['chart', t('Chart type'), t('bar — histogram (default), line — trend, area — area, pie — pie chart')],
+				['stacked', t('Stacked'), t('true — series of bars and areas are stacked on top of each other')],
+				['height', t('Height, px'), t('Chart height; default 260'), true],
+			],
+			board: [
+				['rows', t('Rows'), t('Size of the empty board until the database sends a value'), true],
+				['cols', t('Column count'), '', true],
+			],
+		};
+		const FIELD_TYPES = ['input', 'date', 'hidden', 'display', 'lookup', 'combobox', 'tree'];
+		const $ = (id) => document.getElementById(id);
+		connectUiEvents();  // сообщения из базы видны и в редакторе
+		initSession(document.querySelector('.topbar')).catch((e) => showMessage(e.message, 'error'));
+
+		let actions = [];
+		let forms = [];    // все формы — для списка и для выбора формы у пункта меню
+		// 'form' — редактор формы, 'menu' — меню, 'reports' — отчёты, 'solutions' — решения, 'schema' — схема данных,
+		// 'console' — SQL-консоль, 'mcp' — доступ MCP
+		let mode = 'form';
+		const MODES = { form: 'form-editor', menu: 'menu-editor', reports: 'report-editor', solutions: 'solution-editor',
+			schema: 'schema-editor', console: 'sql-console', mcp: 'mcp-access' };
+		const FILTER_KEY = 'erp-editor-solution';
+		let solutions = [];  // решения — для фильтра в боковой панели и списка под пунктом «Решения»
+		let solutionFilter = localStorage.getItem(FILTER_KEY) ?? '';
+		const solutionEditor = createSolutionEditor($('solution-editor'), {
+			onNavigate: (name) => {
+				history.replaceState(null, '', `editor.html?solutions${name ? `=${encodeURIComponent(name)}` : ''}`);
+				renderSolutionList();
+			},
+			onChanged: () => loadList().catch((error) => showMessage(error.message, 'error')),
+		});
+		const schemaEditor = createSchemaEditor($('schema-editor'), {
+			getSolution: () => solutionFilter,
+			solutions: () => solutions,
+			onNavigate: (kind, name) => history.replaceState(null, '', `editor.html?schema${kind ? `=${kind}${name ? `:${encodeURIComponent(name)}` : ''}` : ''}`),
+			openConsole: (sql) => showConsole(sql).catch((error) => showMessage(error.message, 'error')),
+		});
+		const sqlConsole = createSqlConsole($('sql-console'));
+		const mcpAccess = createMcpAccess($('mcp-access'));
+		const menuEditor = createMenuEditor($('menu-editor'));
+		const reportEditor = createReportEditor($('report-editor'), {
+			onNavigate: (name) => {
+				history.replaceState(null, '', `editor.html?reports${name ? `=${encodeURIComponent(name)}` : ''}`);
+				renderReportList();
+			},
+			onChanged: () => loadList().catch((error) => showMessage(error.message, 'error')),
+		});
+		let reports = [];  // отчёты — в боковой панели под пунктом «Отчёты»
+		let folders = [];  // существующие папки — подсказки для поля «Папка»
+		let form = emptyForm();
+		let selected = null;  // номер выбранного компонента; null — выбрана сама форма
+		let dirty = false;
+
+		function emptyForm(folder = '') {
+			return { name: '', title: '', folder, components: [] };
+		}
+
+		async function loadList() {
+			const [result, reportResult, solutionResult] = await Promise.all([callAction('form_list'), callAction('report_list'), callAction('solution_list')]);
+			solutions = solutionResult.solutions;
+			if (solutionFilter && !solutions.some((s) => s.name === solutionFilter)) {
+				setSolutionFilter('');
+			}
+			renderSolutionFilter();
+			renderSolutionList();
+			reports = reportResult.reports;
+			renderReportList();
+			actions = result.actions;
+			forms = result.forms;
+			folders = [...new Set(result.forms.map((f) => f.folder).filter(Boolean))];
+			for (const [id, value] of [['menu-link', 'menu'], ['schema-link', 'schema'], ['console-link', 'console'], ['mcp-link', 'mcp']]) {
+				$(id).classList.toggle('active', mode === value);
+			}
+			const visibleForms = solutionFilter ? result.forms.filter((f) => f.solution === solutionFilter) : result.forms;
+			$('forms').replaceChildren(...visibleForms.length ? renderFormFolders(visibleForms, (f) => {
+				const link = document.createElement('a');
+				link.href = '#';
+				link.textContent = `${f.title} (${f.name})`;
+				link.classList.toggle('active', mode === 'form' && f.name === form.name);
+				link.addEventListener('click', (event) => {
+					event.preventDefault();
+					if (confirmDiscard()) {
+						openForm(f.name).catch((error) => showMessage(error.message, 'error'));
+					}
+				});
+				return link;
+			}) : [Object.assign(document.createElement('p'), { className: 'sidebar-empty', textContent: t('The solution has no forms yet') })]);
+		}
+
+		// -----------------------------------------------------------------
+		// Решения: фильтр боковой панели и список под пунктом «Решения»
+		// -----------------------------------------------------------------
+		function currentSolution() {
+			return solutions.find((s) => s.name === solutionFilter) ?? null;
+		}
+
+		function setSolutionFilter(value) {
+			solutionFilter = value;
+			localStorage.setItem(FILTER_KEY, value);
+		}
+
+		function renderSolutionFilter() {
+			$('solution-filter').replaceChildren(new Option(t('All'), ''),
+				...solutions.map((s) => new Option(solutionLabel(s), s.name, false, s.name === solutionFilter)));
+			$('solution-filter').value = solutionFilter;
+		}
+
+		$('solution-filter').addEventListener('change', async () => {
+			setSolutionFilter($('solution-filter').value);
+			try {
+				await loadList();
+				if (mode === 'schema' && confirmDiscard()) {
+					await schemaEditor.open({});
+				}
+			}
+			catch (error) {
+				showMessage(error.message, 'error');
+			}
+		});
+
+		function renderSolutionList() {
+			$('solutions-link').classList.toggle('active', mode === 'solutions' && !solutionEditor.name);
+			$('solution-list').replaceChildren(...solutions.map((s) => {
+				const item = document.createElement('li');
+				const link = document.createElement('a');
+				link.href = `editor.html?solutions=${encodeURIComponent(s.name)}`;
+				link.textContent = solutionLabel(s);
+				link.classList.toggle('active', mode === 'solutions' && solutionEditor.name === s.name);
+				link.addEventListener('click', (event) => {
+					event.preventDefault();
+					if (!(mode === 'solutions' && solutionEditor.name === s.name) && confirmDiscard()) {
+						showSolutions(s.name).catch((error) => showMessage(error.message, 'error'));
+					}
+				});
+				item.append(link);
+				return item;
+			}));
+		}
+
+		/** Раздел «Решения»: name — решение; без имени — выбранное в фильтре, иначе новое. */
+		async function showSolutions(name) {
+			setMode('solutions');
+			setDirty(false);
+			$('mode-switch').href = './';
+			await loadList();
+			await solutionEditor.open(name ?? solutionFilter);
+		}
+
+		async function showSchema(target = {}) {
+			setMode('schema');
+			setDirty(false);
+			$('mode-switch').href = './';
+			await loadList();
+			await schemaEditor.open(target);
+		}
+
+		async function showConsole(sql) {
+			if (mode !== 'console' && !confirmDiscard()) {
+				return;
+			}
+			setMode('console');
+			setDirty(false);
+			history.replaceState(null, '', 'editor.html?console');
+			$('mode-switch').href = './';
+			await loadList();
+			await sqlConsole.open({ sql });
+		}
+
+		async function showMcp() {
+			setMode('mcp');
+			setDirty(false);
+			history.replaceState(null, '', 'editor.html?mcp');
+			$('mode-switch').href = './';
+			await loadList();
+			await mcpAccess.open();
+		}
+
+		for (const [id, show, value] of [['solutions-link', () => showSolutions(undefined), 'solutions'], ['schema-link', () => showSchema({}), 'schema'],
+			['console-link', () => showConsole(), 'console'], ['mcp-link', () => showMcp(), 'mcp']]) {
+			$(id).addEventListener('click', (event) => {
+				event.preventDefault();
+				if ((mode !== value || value === 'schema') && confirmDiscard()) {
+					show().catch((error) => showMessage(error.message, 'error'));
+				}
+			});
+		}
+
+		async function openForm(name, keepSelection = false) {
+			// Исходные тексты, не перевод: форма сохраняется обратно
+			form = (await callAction('form_get', { form: name, source: true })).form;
+			setMode('form');
+			if (!keepSelection || selected >= form.components.length) {
+				selected = null;
+			}
+			setDirty(false);
+			syncLocation(form.name);
+			render();
+			await loadList();
+		}
+
+		/** Адрес страницы и переключатель режима указывают на открытую форму. */
+		function syncLocation(name) {
+			const query = name ? `?form=${encodeURIComponent(name)}` : '';
+			history.replaceState(null, '', `editor.html${query}`);
+			$('mode-switch').href = `./${query}`;
+		}
+
+		/** Редактор формы или редактор меню — видна одна из областей. */
+		function setMode(value) {
+			mode = value;
+			for (const [key, id] of Object.entries(MODES)) {
+				$(id).hidden = mode !== key;
+			}
+		}
+
+		async function showMenu() {
+			setMode('menu');
+			setDirty(false);  // несохранённые изменения формы отброшены (confirmDiscard)
+			history.replaceState(null, '', 'editor.html?menu');
+			$('mode-switch').href = './';
+			await loadList();
+			await menuEditor.open(forms);
+		}
+
+		/** Отчёты под пунктом «Отчёты»: открытый — выделен. */
+		function renderReportList() {
+			// Новый отчёт — выделен сам пункт «Отчёты»
+			$('reports-link').classList.toggle('active', mode === 'reports' && !reportEditor.name);
+			$('report-list').replaceChildren(...reports.filter((r) => !solutionFilter || r.solution === solutionFilter).map((r) => {
+				const item = document.createElement('li');
+				const link = document.createElement('a');
+				link.href = `editor.html?reports=${encodeURIComponent(r.name)}`;
+				link.textContent = `${r.title} (${r.name})`;
+				link.classList.toggle('active', mode === 'reports' && reportEditor.name === r.name);
+				link.addEventListener('click', (event) => {
+					event.preventDefault();
+					if (!(mode === 'reports' && reportEditor.name === r.name) && confirmDiscard()) {
+						showReports(r.name).catch((error) => showMessage(error.message, 'error'));
+					}
+				});
+				item.append(link);
+				return item;
+			}));
+		}
+
+		/** Редактор отчётов: name — отчёт; без имени — первый в списке, а если отчётов нет — новый. */
+		async function showReports(name) {
+			setMode('reports');
+			setDirty(false);
+			$('mode-switch').href = './';
+			await loadList();
+			await reportEditor.open(name ?? reports[0]?.name ?? '');
+		}
+
+		$('reports-link').addEventListener('click', (event) => {
+			event.preventDefault();
+			if (mode !== 'reports' && confirmDiscard()) {
+				showReports(undefined).catch((error) => showMessage(error.message, 'error'));
+			}
+		});
+
+		$('menu-link').addEventListener('click', (event) => {
+			event.preventDefault();
+			if (mode !== 'menu' && confirmDiscard()) {
+				showMenu().catch((error) => showMessage(error.message, 'error'));
+			}
+		});
+
+		/** Несохранённые изменения в открытом редакторе — формы или меню. */
+		function isDirty() {
+			return { menu: menuEditor.dirty, reports: reportEditor.dirty, solutions: solutionEditor.dirty, schema: schemaEditor.dirty,
+				console: false, mcp: false }[mode] ?? dirty;
+		}
+
+		function confirmDiscard() {
+			return !isDirty() || confirm(t('There are unsaved changes. Continue without saving?'));
+		}
+
+		function setDirty(value) {
+			dirty = value;
+			$('dirty').hidden = !dirty;
+		}
+
+		/** Любое изменение формы: отметка о несохранённых изменениях и новый предпросмотр. */
+		function changed({ props = false } = {}) {
+			setDirty(true);
+			renderPreview();
+			if (props) {
+				renderProps();
+			}
+		}
+
+		function select(index) {
+			selected = index;
+			render();
+		}
+
+		function render() {
+			$('open-form').href = `./?form=${encodeURIComponent(form.name)}`;
+			$('open-form').hidden = !form.name;
+			renderPreview();
+			renderProps();
+		}
+
+		// -----------------------------------------------------------------
+		// Предпросмотр: форма как в приложении, компонент выбирается щелчком
+		// -----------------------------------------------------------------
+		function renderPreview() {
+			const canvas = $('preview');
+			const activeTab = canvas.querySelector('.erp-tab[aria-selected="true"]')?.textContent;
+			const element = renderForm({ ...form, title: form.title || t('Untitled') }, { preview: true });
+			element.querySelector(':scope > h2').classList.toggle('is-selected', selected === null);
+			if (form.components.length === 0) {
+				const empty = document.createElement('p');
+				empty.className = 'editor-empty';
+				empty.textContent = t('The form has no components yet — add them from the “+ Component” list above the form.');
+				element.append(empty);
+			}
+			canvas.replaceChildren(element);
+
+			// Видна вкладка выбранного компонента, иначе — та, что была открыта
+			const target = element.querySelector(`[data-component-index="${selected}"]`);
+			target?.classList.add('is-selected');
+			const panel = target?.closest('.erp-tabpanel');
+			const tab = panel
+				? element.querySelector(`#${panel.getAttribute('aria-labelledby')}`)
+				: [...element.querySelectorAll('.erp-tab')].find((button) => button.textContent === activeTab);
+			tab?.click();
+		}
+
+		$('preview').addEventListener('click', (event) => {
+			if (event.target.closest('.erp-tablist')) {
+				return;  // переключение вкладок работает как в приложении
+			}
+			event.preventDefault();
+			const component = event.target.closest('[data-component-index]');
+			select(component ? Number(component.dataset.componentIndex) : null);
+		}, true);
+
+		// -----------------------------------------------------------------
+		// Панель свойств
+		// -----------------------------------------------------------------
+		function renderProps() {
+			const panel = $('props');
+			if (selected === null) {
+				panel.replaceChildren(
+					heading(t('Form')),
+					field(t('Name (id)'), input(form.name, (v) => { form.name = v.trim(); setDirty(true); }),
+						t('Lowercase Latin letters, digits and “_”')),
+					field(t('Heading'), input(form.title, (v) => { form.title = v; changed(); })),
+					field(t('Folder'), folderInput(), t('Select an existing one or enter a new one; empty — no folder')),
+					hint(t('Click a component in the form to edit its properties.')),
+				);
+				return;
+			}
+
+			const c = form.components[selected];
+			const index = selected;
+			const tools = document.createElement('div');
+			tools.className = 'editor-props-tools';
+			tools.append(
+				button('↑', () => move(index, -1), index === 0, t('Up')),
+				button('↓', () => move(index, 1), index === form.components.length - 1, t('Down')),
+				button(t('Delete'), () => remove(index), false, t('Delete component (Delete)')),
+			);
+			tools.lastChild.className = 'danger';
+
+			const fields = [
+				field(t('Type'), selectBox(Object.entries(TYPES), c.type, (v) => {
+					c.type = v;
+					if (!WITH_ACTION.includes(v)) c.action = null;
+					if (v !== 'grid') c.master = null;
+					if (INVISIBLE.includes(v)) c.tab = null;
+					c.options = null;
+					changed({ props: true });
+				})),
+				field(t('Name'), input(c.name, (v) => { c.name = v.trim(); changed(); }),
+					FIELD_TYPES.includes(c.type) ? t('The field value is sent to button actions under this name') : ''),
+			];
+			if (!INVISIBLE.includes(c.type)) {
+				fields.push(field({ grid: t('Table title'), tree: t('Tree title'), chart: t('Chart title') }[c.type] ?? t('Label'),
+					input(c.label, (v) => { c.label = v; changed(); })));
+			}
+			if (WITH_ACTION.includes(c.type)) {
+				const actionHints = {
+					button: t('Called on click with the values of all form fields'),
+					grid: t('Table data source'),
+					lookup: t('Opens the list to select from'),
+					combobox: t('Item source: receives the form field values, returns {items: [{id, label}]}'),
+					timer: t('Called by the timer with the values of all form fields'),
+					tree: t('Node source: receives parent_id, returns a tree level'),
+					chart: t('Chart data source: receives the form field values, returns {labels, series: [{name, values}]}'),
+				};
+				fields.push(field(t('Action'), actionControl(c), actionHints[c.type]));
+			}
+			if (c.type === 'grid') {
+				const columnsButton = button(t('Columns…'),
+					() => openGridColumnsEditor(c.action).catch((e) => showMessage(e.message, 'error')),
+					!c.action, c.action ? '' : t('Choose the data source action first'));
+				fields.push(field(t('Columns'), columnsButton,
+					t('Source fields in the table: order, titles, format, sorting. Shared by all tables with this source')));
+				fields.push(field(t('Master'), masterControl(c),
+					t('For a details table: the form field whose value links rows to the master')));
+			}
+			// «Колонка» — у всех видимых компонентов
+			const optionFields = [...OPTION_FIELDS[c.type] ?? [],
+				...INVISIBLE.includes(c.type) ? [] : [['column', t('Column'), t('Column number (1, 2, …): components with the same number are stacked, columns stand side by side. Empty — full width'), true]]];
+			for (const [key, caption, help, numeric] of optionFields) {
+				fields.push(field(caption, input(c.options?.[key], (v) => {
+					const value = numeric ? Number(v) || null : v.trim() || null;
+					const { [key]: _, ...rest } = c.options ?? {};
+					c.options = value === null ? rest : { ...rest, [key]: value };
+					changed();
+				}), help));
+			}
+			if (!INVISIBLE.includes(c.type)) {
+				const tab = input(c.tab, (v) => { c.tab = v.trim() || null; changed(); });
+				tab.setAttribute('list', 'tab-names');
+				$('tab-names').replaceChildren(...[...new Set(form.components.map((o) => o.tab).filter(Boolean))]
+					.map((name) => new Option(name)));
+				fields.push(field(t('Tab'), tab, t('Components with the same name are shown on one tab')));
+			}
+
+			const back = button(t('← Form properties'), () => select(null));
+			back.className = 'link';
+			panel.replaceChildren(back, heading(`${TYPES[c.type] ?? c.type}`), tools, ...fields);
+		}
+
+		function folderInput() {
+			const element = input(form.folder, (v) => { form.folder = v; setDirty(true); });
+			element.setAttribute('list', 'folder-names');
+			$('folder-names').replaceChildren(...folders.map((name) => new Option(name)));
+			return element;
+		}
+
+		function heading(text) {
+			const element = document.createElement('h3');
+			element.textContent = text;
+			return element;
+		}
+
+		function hint(text) {
+			const element = document.createElement('p');
+			element.className = 'editor-hint';
+			element.textContent = text;
+			return element;
+		}
+
+		function field(caption, control, help) {
+			const wrapper = document.createElement('label');
+			wrapper.className = 'erp-field';
+			const span = document.createElement('span');
+			span.textContent = caption;
+			wrapper.append(span, control);
+			if (help) {
+				wrapper.append(hint(help));
+			}
+			return wrapper;
+		}
+
+		function selectBox(options, value, onChange) {
+			const element = document.createElement('select');
+			for (const [optionValue, text] of options) {
+				element.add(new Option(text, optionValue, false, optionValue === (value ?? '')));
+			}
+			element.addEventListener('change', () => onChange(element.value));
+			return element;
+		}
+
+		function input(value, onInput) {
+			const element = document.createElement('input');
+			element.value = value ?? '';
+			element.addEventListener('input', () => onInput(element.value));
+			return element;
+		}
+
+		function button(text, onClick, disabled = false, title = '') {
+			const element = document.createElement('button');
+			element.type = 'button';
+			element.textContent = text;
+			element.disabled = disabled;
+			element.title = title;
+			element.addEventListener('click', onClick);
+			return element;
+		}
+
+		/** Поле-мастер таблицы-деталей: выбирается из полей этой же формы. */
+		function masterControl(c) {
+			const fields = form.components
+				.filter((other) => ['input', 'hidden', 'lookup', 'combobox', 'tree'].includes(other.type) && other.name)
+				.map((other) => [other.name, other.name]);
+			return selectBox([['', '—'], ...fields], c.master, (v) => { c.master = v || null; changed(); });
+		}
+
+		/** Выбор действия + переход к коду его PL/pgSQL-функции. */
+		function actionControl(c) {
+			const cell = document.createElement('span');
+			cell.className = 'action-cell';
+			const code = button('{ }', () => editFunction(c).catch((e) => showMessage(e.message, 'error')),
+				false, t('Function code: open or create a template'));
+			const options = [['', '—'], ...actions.map((a) => [a.name, a.name])];
+			cell.append(selectBox(options, c.action, (v) => {
+				c.action = v || null;
+				changed();
+			}), code);
+			return cell;
+		}
+
+		// -----------------------------------------------------------------
+		// Компоненты: добавление, порядок, удаление
+		// -----------------------------------------------------------------
+		// Палитра: щелчок — компонент после выбранного, перетаскивание — в место, куда отпустили
+		$('palette').replaceChildren(...Object.entries(TYPES).map(([type, text]) => {
+			const item = button('', () => addComponent(type, selected === null ? form.components.length : selected + 1, selected ?? -1));
+			item.className = 'palette-item';
+			item.draggable = true;
+			item.title = t('Add: {0}', text);
+			const icon = document.createElement('span');
+			icon.className = 'palette-icon';
+			icon.textContent = ICONS[type];
+			item.append(icon, text.replace(/ \(.*\)$/, ''));  // в палитре — коротко, полностью в подсказке
+			item.addEventListener('dragstart', (event) => {
+				event.dataTransfer.setData('application/x-erp-component', type);
+				event.dataTransfer.effectAllowed = 'copy';
+			});
+			return item;
+		}));
+
+		/** Новый компонент на позиции index; встаёт на вкладку компонента-соседа с номером neighbour (-1 — без вкладки). */
+		function addComponent(type, index, neighbour) {
+			form.components.splice(index, 0, {
+				type,
+				name: uniqueName(type),
+				label: DEFAULT_LABELS[type] ?? '',
+				action: null,
+				master: null,
+				options: null,
+				tab: (!INVISIBLE.includes(type) && form.components[neighbour]?.tab) || null,
+			});
+			selected = index;
+			changed({ props: true });
+		}
+
+		/** Куда встанет перетаскиваемый компонент: перед или после компонента под курсором, иначе в конец. */
+		function dropPlace(event) {
+			const target = event.target.closest('[data-component-index]');
+			if (!target) {
+				return { index: form.components.length, target: null };
+			}
+			const index = Number(target.dataset.componentIndex);
+			const rect = target.getBoundingClientRect();
+			// Кнопки стоят в ряд — для них важна горизонталь
+			const after = target.parentElement.classList.contains('erp-buttons')
+				? event.clientX > rect.left + rect.width / 2
+				: event.clientY > rect.top + rect.height / 2;
+			return { index: after ? index + 1 : index, target, after, neighbour: index };
+		}
+
+		function clearDropMarks() {
+			$('preview').querySelectorAll('.drop-before, .drop-after').forEach((element) => {
+				element.classList.remove('drop-before', 'drop-after');
+			});
+			$('preview').classList.remove('drop-end');
+		}
+
+		$('preview').addEventListener('dragover', (event) => {
+			if (!event.dataTransfer.types.includes('application/x-erp-component')) {
+				return;
+			}
+			event.preventDefault();
+			event.dataTransfer.dropEffect = 'copy';
+			clearDropMarks();
+			const place = dropPlace(event);
+			if (place.target) {
+				place.target.classList.add(place.after ? 'drop-after' : 'drop-before');
+			}
+			else {
+				$('preview').classList.add('drop-end');
+			}
+		});
+		$('preview').addEventListener('dragleave', (event) => {
+			if (!$('preview').contains(event.relatedTarget)) {
+				clearDropMarks();
+			}
+		});
+		$('preview').addEventListener('drop', (event) => {
+			const type = event.dataTransfer.getData('application/x-erp-component');
+			if (!type) {
+				return;
+			}
+			event.preventDefault();
+			clearDropMarks();
+			const place = dropPlace(event);
+			addComponent(type, place.index, place.neighbour ?? -1);
+		});
+
+		function uniqueName(type) {
+			const names = new Set(form.components.map((c) => c.name));
+			let n = 1;
+			while (names.has(`${type}_${n}`)) {
+				n++;
+			}
+			return `${type}_${n}`;
+		}
+
+		function move(index, delta) {
+			const [component] = form.components.splice(index, 1);
+			form.components.splice(index + delta, 0, component);
+			selected = index + delta;
+			changed({ props: true });
+		}
+
+		function remove(index) {
+			form.components.splice(index, 1);
+			selected = null;
+			changed({ props: true });
+		}
+
+		// Delete — удалить выбранный компонент, Escape — к свойствам формы (если фокус не в поле ввода)
+		document.addEventListener('keydown', (event) => {
+			if (mode !== 'form' || event.target.closest('input, select, textarea, dialog') || selected === null) {
+				return;
+			}
+			if (event.key === 'Delete') {
+				remove(selected);
+			}
+			else if (event.key === 'Escape') {
+				select(null);
+			}
+		});
+
+		// -----------------------------------------------------------------
+		// Редактор функций действий
+		// -----------------------------------------------------------------
+		/**
+		 * Кнопка «{ }» у поля «Действие»: функция выбранного действия — для правки, без действия — заготовка
+		 * под тип компонента (обработчик с полями формы, источник таблицы, дерева, списка…).
+		 * Новая функция после сохранения становится действием компонента.
+		 */
+		async function editFunction(c) {
+			const request = c.action ? { action: c.action } : {
+				form: form.name,
+				component: c.name,
+				type: c.type,
+				label: c.label ?? '',
+				fields: form.components
+					.filter((other) => other !== c && FIELD_TYPES.includes(other.type) && other.name)
+					.map((other) => ({ name: other.name, type: other.type, label: other.label ?? '' })),
+			};
+			const { function: fn } = await callAction('function_get', request);
+			openFunctionEditor(fn, async (name) => {
+				if (c.action !== name) {
+					await loadList();  // новое действие — в списках выбора
+					c.action = name;
+					changed({ props: true });
+				}
+			});
+		}
+
+
+		// -----------------------------------------------------------------
+		// Форма целиком
+		// -----------------------------------------------------------------
+		$('new-form').addEventListener('click', () => {
+			if (confirmDiscard()) {
+				// Новая форма — в папке текущей; при выбранном решении — в его папке меню и с его префиксом
+				form = emptyForm(currentSolution()?.menu_folder ?? form.folder ?? '');
+				form.name = currentSolution()?.prefix ?? '';
+				selected = null;
+				setDirty(false);
+				syncLocation('');
+				render();
+				loadList().catch((error) => showMessage(error.message, 'error'));
+			}
+		});
+
+		$('save-form').addEventListener('click', async () => {
+			try {
+				const result = await callAction('form_save', form);
+				await applyInstructions(result.ui_instructions);
+				await openForm(form.name, true);
+			}
+			catch (error) {
+				showMessage(error.message, 'error');
+			}
+		});
+
+		$('delete-form').addEventListener('click', async () => {
+			if (!form.name || !confirm(t('Delete form "{0}"?', form.name))) {
+				return;
+			}
+			try {
+				await callAction('form_delete', { form: form.name });
+				form = emptyForm();
+				selected = null;
+				setDirty(false);
+				syncLocation('');
+				render();
+				await loadList();
+			}
+			catch (error) {
+				showMessage(error.message, 'error');
+			}
+		});
+
+		window.addEventListener('beforeunload', (event) => {
+			if (isDirty()) {
+				event.preventDefault();
+			}
+		});
+
+		try {
+			await loadList();
+			render();
+			// Из режима «Формы» приходят с ?form= — сразу открывается эта форма; ?menu — редактор меню
+			const params = new URLSearchParams(location.search);
+			if (params.has('menu')) {
+				await showMenu();
+			}
+			else if (params.has('solutions')) {
+				await showSolutions(params.get('solutions') || '');
+			}
+			else if (params.has('schema')) {
+				const [kind, ...name] = (params.get('schema') ?? '').split(':');
+				await showSchema(kind ? { kind, name: name.join(':') || undefined } : {});
+			}
+			else if (params.has('console')) {
+				await showConsole();
+			}
+			else if (params.has('mcp')) {
+				await showMcp();
+			}
+			else if (params.has('reports')) {
+				await showReports(params.get('reports') || undefined);
+			}
+			else if (params.get('form')) {
+				await openForm(params.get('form'));
+			}
+		}
+		catch (error) {
+			showMessage(error.message, 'error');
+		}
+	</script>
+</body>
+</html>

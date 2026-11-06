@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>ERP Forms</title>
+	<link rel="stylesheet" href="css/app.css">
+	<!-- Тема — до отрисовки страницы -->
+	<script src="js/theme.js"></script>
+</head>
+<body>
+	<header class="topbar">
+		<a href="./" class="topbar-brand" aria-label="PgERP — home" data-i18n-attrs="aria-label"><span class="topbar-brand-pg">Pg</span>ERP</a>
+		<a id="mode-switch" class="topbar-mode" href="editor.html" title="Switch to “Form editor” mode" data-i18n data-i18n-attrs="title">Forms</a>
+	</header>
+	<div class="shell">
+		<nav class="sidebar" aria-labelledby="menu-title">
+			<h3 id="menu-title" class="sidebar-title" data-i18n>Menu</h3>
+			<div id="menu"></div>
+		</nav>
+		<main class="content">
+			<div id="app"></div>
+		</main>
+	</div>
+
+	<script type="module">
+		import { callAction, connectUiEvents, initSession, renderForm, renderMenu, showMessage } from './js/ui-runtime.js';
+		import { t, translatePage } from './js/i18n.js';
+
+		translatePage();
+
+		const app = document.getElementById('app');
+		connectUiEvents();
+		const formName = new URLSearchParams(location.search).get('form');
+
+		async function renderPage() {
+			// Меню настраивается в редакторе: пункты с вложенностью, у пункта — форма, которая открывается.
+			// База показывает только пункты с формами, доступными пользователю
+			const { items } = await callAction('menu_get');
+			const menu = document.getElementById('menu');
+			if (items.length > 0) {
+				menu.replaceChildren(renderMenu(items, (item) => {
+					const link = document.createElement('a');
+					link.href = `?form=${encodeURIComponent(item.form)}`;
+					link.textContent = item.title;
+					return link;
+				}, formName));
+			}
+			else {
+				const empty = document.createElement('p');
+				empty.className = 'sidebar-empty';
+				empty.textContent = t('The menu is empty — no forms are available.');
+				menu.replaceChildren(empty);
+			}
+			if (formName) {
+				const { form } = await callAction('form_get', { form: formName });
+				document.title = form.title;
+				// Переключение в редактор открывает эту же форму
+				document.getElementById('mode-switch')?.setAttribute('href', `editor.html?form=${encodeURIComponent(formName)}`);
+				app.append(renderForm(form));
+			}
+			else {
+				const hint = document.createElement('p');
+				hint.className = 'content-empty';
+				hint.textContent = t('Select an item in the menu on the left.');
+				app.append(hint);
+			}
+		}
+
+		try {
+			// Пользователь в шапке; пока пароль не сменён, остальное недоступно
+			const user = await initSession(document.querySelector('.topbar'));
+			if (!user.must_change_password) {
+				await renderPage();
+			}
+		}
+		catch (error) {
+			showMessage(error.message, 'error');
+		}
+	</script>
+</body>
+</html>

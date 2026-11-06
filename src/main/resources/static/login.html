@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title data-i18n>Sign in — PgERP</title>
+	<link rel="stylesheet" href="css/app.css">
+	<!-- Тема — до отрисовки страницы -->
+	<script src="js/theme.js"></script>
+</head>
+<body>
+	<header class="topbar">
+		<a class="topbar-brand" href="./" aria-label="PgERP"><span class="topbar-brand-pg">Pg</span>ERP</a>
+	</header>
+
+	<form id="login" class="login" novalidate>
+		<h1 data-i18n>Welcome</h1>
+		<label class="erp-field">
+			<span data-i18n>Login</span>
+			<input name="username" autocomplete="username" required autofocus>
+		</label>
+		<label class="erp-field">
+			<span data-i18n>Password</span>
+			<input name="password" type="password" autocomplete="current-password" required>
+		</label>
+		<p id="error" class="login-error" role="alert" hidden></p>
+		<button type="submit" class="primary" data-i18n>Sign in</button>
+	</form>
+
+	<!-- Страница открывается без входа, поэтому подключает только словарь (i18n.js), без ui-runtime.js -->
+	<script type="module">
+		import { language, t, translatePage } from './js/i18n.js';
+
+		translatePage();
+		const form = document.getElementById('login');
+		const error = document.getElementById('error');
+
+		// Токен CSRF сервер кладёт в cookie XSRF-TOKEN при открытии страницы
+		function csrfHeaders() {
+			const token = document.cookie.split('; ').find((c) => c.startsWith('XSRF-TOKEN='))?.slice('XSRF-TOKEN='.length);
+			return token ? { 'X-XSRF-TOKEN': decodeURIComponent(token) } : {};
+		}
+
+		// Куда вернуться после входа: только адрес этого же сайта
+		function target(saved) {
+			const next = new URLSearchParams(location.search).get('next');
+			for (const url of [next, saved]) {
+				if (url) {
+					const parsed = new URL(url, location.origin);
+					if (parsed.origin === location.origin && !parsed.pathname.endsWith('/login.html')) {
+						return parsed.pathname + parsed.search;
+					}
+				}
+			}
+			return './';
+		}
+
+		form.addEventListener('submit', async (event) => {
+			event.preventDefault();
+			error.hidden = true;
+			const button = form.querySelector('button');
+			button.disabled = true;
+			try {
+				const response = await fetch('api/auth/login', {
+					method: 'POST',
+					// Ошибки входа — на языке страницы
+					headers: { ...csrfHeaders(), 'Accept-Language': language() },
+					body: new URLSearchParams(new FormData(form)),
+				});
+				const result = await response.json().catch(() => ({}));
+				if (response.ok) {
+					location.assign(target(result.redirect));
+					return;
+				}
+				error.textContent = result.message
+					|| (response.status === 403 ? t('The page is out of date — reload it and sign in again') : t('Sign-in error (HTTP {0})', response.status));
+				error.hidden = false;
+				form.elements.password.select();
+			}
+			catch {
+				error.textContent = t('The server is unavailable');
+				error.hidden = false;
+			}
+			finally {
+				button.disabled = false;
+			}
+		});
+	</script>
+</body>
+</html>

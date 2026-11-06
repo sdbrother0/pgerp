@@ -1,0 +1,2719 @@
+:root {
+	/* Тема в духе GitHub Primer и корпоративных ERP: нейтральные серые, синий акцент */
+	--bg: #f6f8fa;
+	--surface: #ffffff;
+	--text: #1f2328;
+	--muted: #59636e;
+	--border: #d1d9e0;
+	--border-muted: #e1e6ec;
+	--accent: #0969da;
+	--accent-hover: #0757ba;
+	--accent-subtle: #ddf4ff;
+	--danger: #d1242f;
+	--success: #1a7f37;
+	--warning: #9a6700;
+	--attention: #9a6700;
+	--done: #8250df;
+	--control-bg: #f6f8fa;
+	--control-hover: #eff2f5;
+	--control-active: #e6eaef;
+	--row-hover: #f6f8fa;
+	--radius: 6px;
+	--radius-overlay: 12px;
+	--shadow-control: 0 1px 0 rgb(31 35 40 / 0.04);
+	--shadow-card: 0 1px 0 rgb(31 35 40 / 0.04);
+	--shadow-overlay: 0 1px 3px rgb(31 35 40 / 0.12), 0 8px 24px rgb(66 74 83 / 0.12);
+	/* Заливки с белым текстом (основная и опасная кнопки) — в тёмной теме насыщеннее акцента */
+	--accent-emphasis: var(--accent);
+	--accent-emphasis-hover: var(--accent-hover);
+	--danger-emphasis: var(--danger);
+	--danger-emphasis-hover: #a40e26;
+	--danger-subtle: #ffebe9;
+	--on-emphasis: #fff;
+	--border-emphasis: rgb(31 35 40 / 0.15);
+	--input-inset: rgb(208 215 222 / 0.2);
+	/* Подложки: наведение, выбранный пункт, счётчики, затемнение под окнами */
+	--hover-bg: rgb(208 215 222 / 0.32);
+	--selected-bg: rgb(208 215 222 / 0.48);
+	--counter-bg: rgb(129 139 152 / 0.18);
+	--backdrop: rgb(31 35 40 / 0.4);
+	--backdrop-strong: rgb(0 0 0 / 0.35);
+	/* Редактор форм: точки холста и рамка под курсором */
+	--canvas-dot: #d8dee4;
+	--outline-hover: #b9cdf3;
+	/* Рамки меток (колонки badge): тоны, которые задают данные — {label, tone} */
+	--badge-accent: #54aeff;
+	--badge-attention: #d4a72c;
+	--badge-success: #4ac26b;
+	--badge-done: #c297ff;
+	--folder: #54aeff;
+	/* Ряды графиков (chart) */
+	--chart-0: #2f81f7;
+	--chart-1: #1a7f37;
+	--chart-2: #bf8700;
+	--chart-3: #8250df;
+	--chart-4: #cf222e;
+	--chart-5: #0a8fa0;
+	/* Подсветка SQL в окне кода */
+	--code-keyword: #1f4fbf;
+	--code-string: #1d7a3f;
+	--code-comment: #8a8f99;
+	--code-dollar: #a0459a;
+	--code-number: #b35900;
+	--code-type: #0b7285;
+	--code-function: #6639ba;
+	--code-selection: rgba(31, 79, 191, 0.22);
+	color-scheme: light;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+	font-size: 13px;
+	line-height: 1.4;
+	color: var(--text);
+}
+
+/* Тёмная тема — в духе GitHub Dark. Тема выбирается атрибутом data-theme у <html> (js/theme.js);
+   новая тема — такой же блок со своими значениями переменных и строка в pgerp.themes */
+:root[data-theme="dark"] {
+	--bg: #0d1117;
+	--surface: #151b23;
+	--text: #f0f6fc;
+	--muted: #9198a1;
+	--border: #3d444d;
+	--border-muted: #2a313c;
+	--accent: #4493f8;
+	--accent-hover: #6cb6ff;
+	--accent-subtle: rgb(56 139 253 / 0.15);
+	--danger: #f85149;
+	--success: #3fb950;
+	--warning: #d29922;
+	--attention: #d29922;
+	--done: #ab7df8;
+	--control-bg: #212830;
+	--control-hover: #262c36;
+	--control-active: #2a313c;
+	--row-hover: #1c2129;
+	--shadow-control: 0 0 transparent;
+	--shadow-card: 0 0 transparent;
+	--shadow-overlay: 0 0 0 1px #3d444d, 0 8px 24px rgb(1 4 9 / 0.75);
+	--accent-emphasis: #1f6feb;
+	--accent-emphasis-hover: #388bfd;
+	--danger-emphasis: #da3633;
+	--danger-emphasis-hover: #f85149;
+	--danger-subtle: rgb(248 81 73 / 0.15);
+	--on-emphasis: #fff;
+	--border-emphasis: rgb(240 246 252 / 0.1);
+	--input-inset: transparent;
+	--hover-bg: rgb(101 108 118 / 0.2);
+	--selected-bg: rgb(101 108 118 / 0.32);
+	--counter-bg: rgb(101 108 118 / 0.3);
+	--backdrop: rgb(1 4 9 / 0.6);
+	--backdrop-strong: rgb(1 4 9 / 0.7);
+	--canvas-dot: #2a313c;
+	--outline-hover: rgb(31 111 235 / 0.6);
+	--badge-accent: #1f6feb;
+	--badge-attention: #9e6a03;
+	--badge-success: #238636;
+	--badge-done: #8957e5;
+	--folder: #54aeff;
+	--chart-0: #4493f8;
+	--chart-1: #3fb950;
+	--chart-2: #d29922;
+	--chart-3: #ab7df8;
+	--chart-4: #f85149;
+	--chart-5: #39c5cf;
+	--code-keyword: #ff7b72;
+	--code-string: #a5d6ff;
+	--code-comment: #9198a1;
+	--code-dollar: #d2a8ff;
+	--code-number: #f2cc60;
+	--code-type: #56d4dd;
+	--code-function: #ffa657;
+	--code-selection: rgba(88, 166, 255, 0.3);
+	/* Календарь, списки и полосы прокрутки браузера — тоже тёмные */
+	color-scheme: dark;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	min-height: 100vh;
+	margin: 0;
+	background: var(--bg);
+}
+
+h2, h3 {
+	color: var(--text);
+}
+
+/* hidden сильнее display у кнопок и полей */
+[hidden] {
+	display: none !important;
+}
+
+.topbar {
+	display: flex;
+	gap: 15px;
+	align-items: stretch;
+	padding: 0 12px 0 0;
+	background: var(--surface);
+	border-bottom: 1px solid var(--border);
+	box-shadow: var(--shadow-card);
+}
+
+.topbar a, .form-list a {
+	color: var(--accent);
+	text-decoration: none;
+}
+
+/* Текущий режим работы; щелчок переключает в другой (Формы ⇄ Редактор форм) */
+.topbar a.topbar-mode {
+	display: flex;
+	align-items: center;
+	color: var(--text);
+	font-weight: 600;
+}
+
+.topbar a.topbar-mode::after {
+	content: '⇄';
+	margin-left: 5px;
+	color: var(--muted);
+	font-weight: 400;
+}
+
+.topbar a.topbar-mode:hover::after {
+	color: var(--accent);
+}
+
+/* Логотип: синий градиентный прямоугольник вплотную к левому краю
+   и на всю высоту шапки (от верха до нижней линии) */
+.topbar a.topbar-brand {
+	--brand-height: 32px;
+	/* «Pg» и «ERP» разного размера: стоят на общей базовой линии, строка — по центру блока */
+	display: flex;
+	flex-wrap: wrap;
+	align-content: center;
+	align-items: baseline;
+	flex-shrink: 0;
+	box-sizing: border-box;
+	height: var(--brand-height);
+	margin: 0 4px 0 0;
+	padding: 0 12px;
+	background: linear-gradient(180deg, #2b9be8 0%, #1565c0 100%);
+	color: #fff;
+	font: 800 1.3rem/1.1 "Arial Black", "Helvetica Neue", Arial, sans-serif;
+	letter-spacing: 0.01em;
+}
+
+.topbar-brand-pg {
+	font-size: 1.1rem;
+	font-family: "Helvetica Neue", Arial, sans-serif;
+	font-weight: 400;
+}
+
+/* Каркас: шапка сверху, под ней меню форм слева (отделено линией) и рабочая область */
+.shell {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.sidebar {
+	flex: 0 0 248px;
+	box-sizing: border-box;
+	padding: 12px 6px;
+	background: var(--surface);
+	border-right: 1px solid var(--border);
+}
+
+.sidebar-title {
+	margin: 0 0 6px;
+	padding: 0 6px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+/* Выбранная форма — как выбранный узел дерева: серый фон и синяя скруглённая полоска слева, за краем пункта */
+.sidebar .form-list a.active {
+	position: relative;
+	background: var(--selected-bg);
+}
+
+.sidebar .form-list a.active::after {
+	content: '';
+	position: absolute;
+	left: -6px;
+	top: calc(50% - 12px);
+	width: 4px;
+	height: 22px;
+	border-radius: 6px;
+	background: var(--accent);
+}
+
+/* Формы в папке сдвинуты вправо, а полоска — у края меню, как у дерева на любой глубине */
+.sidebar .form-folder .form-list a.active::after {
+	left: -24px;
+}
+
+.content {
+	flex: 1;
+	min-width: 0;
+}
+
+.content-empty {
+	color: var(--muted);
+}
+
+#app {
+	max-width: 480px;
+	margin: 24px auto;
+	padding: 0 12px;
+}
+
+/* Поля ввода: 32px, белые, синяя рамка в фокусе */
+input, select {
+	box-sizing: border-box;
+	min-height: 28px;
+	padding: 4px 9px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	color: inherit;
+	font: inherit;
+	box-shadow: inset 0 1px 0 var(--input-inset);
+}
+
+input:focus, select:focus {
+	border-color: var(--accent);
+	outline: 2px solid var(--accent);
+	outline-offset: -1px;
+}
+
+input[readonly] {
+	background: var(--control-bg);
+}
+
+/* Кнопки: по умолчанию — серая с рамкой; основная — синяя; опасная — красный текст */
+button, .toolbar a {
+	box-sizing: border-box;
+	display: inline-flex;
+	gap: 5px;
+	align-items: center;
+	justify-content: center;
+	min-height: 28px;
+	padding: 0 9px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--control-bg);
+	color: var(--text);
+	font-family: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 18px;
+	white-space: nowrap;
+	box-shadow: var(--shadow-control);
+	cursor: pointer;
+	transition: background-color 0.08s, border-color 0.08s;
+}
+
+button:hover:not(:disabled), .toolbar a:hover {
+	background: var(--control-hover);
+}
+
+button:active:not(:disabled) {
+	background: var(--control-active);
+}
+
+button:focus-visible, .toolbar a:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: -2px;
+}
+
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+button.primary, .erp-form button {
+	border-color: var(--border-emphasis);
+	background: var(--accent-emphasis);
+	color: var(--on-emphasis);
+}
+
+button.primary:hover:not(:disabled), .erp-form button:hover:not(:disabled) {
+	background: var(--accent-emphasis-hover);
+}
+
+button.primary:focus-visible, .erp-form button:focus-visible {
+	outline-offset: 2px;
+}
+
+button.danger {
+	color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+	border-color: var(--border-emphasis);
+	background: var(--danger-emphasis);
+	color: var(--on-emphasis);
+}
+
+.toolbar a {
+	text-decoration: none;
+}
+
+/* Форма, построенная по метаданным: белая карточка, заголовок с разделителем */
+.erp-form {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 15px 18px 18px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-card);
+}
+
+.erp-form > h2 {
+	align-self: stretch;
+	margin: 0;
+	padding-bottom: 9px;
+	border-bottom: 1px solid var(--border-muted);
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.erp-field {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	align-self: stretch;
+}
+
+/* Подпись поля */
+.erp-field > span:first-child {
+	color: var(--text);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.erp-label {
+	margin: 0;
+	color: var(--muted);
+}
+
+/* Окно сообщения */
+dialog.message {
+	min-width: 300px;
+	max-width: min(480px, calc(100vw - 32px));
+	padding: 15px 15px 12px;
+	border: none;
+	border-radius: var(--radius-overlay);
+	box-shadow: var(--shadow-overlay);
+	color: var(--text);
+}
+
+dialog.message::backdrop {
+	background: var(--backdrop);
+}
+
+dialog.message p {
+	margin: 0 0 15px;
+	font-size: 13px;
+}
+
+/* Ошибка: красный заголовок над текстом */
+dialog.message-error::before {
+	content: 'Error';
+	display: block;
+	margin-bottom: 5px;
+	color: var(--danger);
+	font-weight: 600;
+}
+
+dialog.message form {
+	text-align: right;
+}
+
+/* Редактор (справа от меню форм): компоненты | форма (предпросмотр) | свойства выбранного */
+.editor {
+	display: grid;
+	grid-template-columns: 200px minmax(0, 1fr) 300px;
+	gap: 18px;
+	padding: 12px;
+	align-items: start;
+}
+
+.form-list {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.form-list a {
+	display: block;
+	padding: 4px 6px;
+	border-radius: var(--radius);
+	color: var(--text);
+	text-decoration: none;
+}
+
+.form-list a:hover {
+	background: var(--control-hover);
+}
+
+.form-list a.active {
+	background: var(--control-active);
+	font-weight: 600;
+}
+
+/* Папки форм */
+.form-folder {
+	margin: 6px 0;
+}
+
+.form-folder summary {
+	display: flex;
+	list-style: none;
+	gap: 6px;
+	align-items: center;
+	padding: 4px 6px;
+	border-radius: var(--radius);
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	cursor: pointer;
+}
+
+.form-folder summary:hover {
+	background: var(--control-hover);
+}
+
+/* Шеврон как в дереве */
+.form-folder summary::before {
+	content: '';
+	width: 5px;
+	height: 5px;
+	margin: 0 2px 0 1px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+	transition: transform 0.12s;
+}
+
+.form-folder[open] summary::before {
+	margin-top: -2px;
+	transform: rotate(45deg);
+}
+
+.form-folder summary::-webkit-details-marker {
+	display: none;
+}
+
+.form-folder-count {
+	padding: 0 5px;
+	border-radius: 2em;
+	background: var(--counter-bg);
+	color: var(--text);
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0;
+	text-transform: none;
+}
+
+.form-folder .form-list {
+	margin: 2px 0 0;
+	padding-left: 12px;
+}
+
+/* Меню приложения (режим «Формы»): группы любой вложенности, отметка выбранного — у края меню */
+.sidebar .menu-tree a.menu-link.active::after {
+	left: calc(-8px - 16px * var(--menu-depth, 0));
+}
+
+/* Название группы со своей формой — ссылка в заголовке группы: выглядит как заголовок,
+   выбранная — синим, без фона и полоски обычного пункта */
+.sidebar .menu-tree summary a.menu-group-link {
+	padding: 0;
+	background: none;
+	color: inherit;
+	text-decoration: none;
+}
+
+.sidebar .menu-tree summary a.menu-group-link::after {
+	content: none;
+}
+
+.sidebar .menu-tree summary a.menu-group-link:hover {
+	color: var(--accent);
+}
+
+.sidebar .menu-tree summary a.menu-group-link.active {
+	color: var(--accent);
+}
+
+/* Пункт без формы и без подпунктов — просто текст */
+.menu-text {
+	display: block;
+	padding: 4px 6px;
+	color: var(--muted);
+}
+
+.sidebar-empty {
+	margin: 0;
+	padding: 0 6px;
+	color: var(--muted);
+}
+
+/* Редактор: пункт «Меню» над списком форм */
+.sidebar-section {
+	margin-bottom: 12px;
+}
+
+/* Редактор меню: дерево пунктов | свойства выбранного */
+.editor.menu-editor {
+	grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.menu-editor .editor-canvas > h3 {
+	margin: 0 0 6px;
+}
+
+.menu-editor-tree {
+	padding: 3px 6px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-card);
+}
+
+.menu-editor-tree:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.menu-editor-tree .editor-empty {
+	padding: 6px;
+}
+
+/* Пункты — как узлы дерева (.erp-tree-row): высота, отступ уровня, подсветка и выбор */
+.menu-editor-row {
+	position: relative;
+	display: flex;
+	gap: 9px;
+	align-items: center;
+	height: 28px;
+	padding: 0 6px 0 calc(6px + 12px * var(--depth, 0));
+	border-radius: 6px;
+	line-height: 18px;
+	cursor: pointer;
+	user-select: none;
+}
+
+.menu-editor-row:hover {
+	background: var(--hover-bg);
+}
+
+/* Выбранный пункт: серая подложка и синяя полоса слева, текст не выделяется */
+.menu-editor-row.is-selected {
+	background: var(--selected-bg);
+}
+
+.menu-editor-row.is-selected::after {
+	content: '';
+	position: absolute;
+	left: -6px;
+	top: calc(50% - 12px);
+	width: 4px;
+	height: 22px;
+	border-radius: 6px;
+	background: var(--accent);
+}
+
+.menu-editor-title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Группа — полужирная, со значком раскрытия */
+.menu-editor-row.is-group .menu-editor-title {
+	font-weight: 600;
+}
+
+.menu-editor-row.is-group .menu-editor-title::before {
+	content: '▾ ';
+	color: var(--muted);
+}
+
+.menu-editor-form {
+	margin-left: auto;
+	color: var(--muted);
+	font-size: 11px;
+	white-space: nowrap;
+}
+
+.menu-editor-form.is-missing {
+	color: var(--attention);
+}
+
+.editor-palette {
+	position: sticky;
+	top: 16px;
+	padding: 9px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-card);
+}
+
+.editor-palette h3 {
+	margin: 0 0 6px;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+#palette {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	margin-bottom: 6px;
+}
+
+.palette-item {
+	justify-content: flex-start;
+	gap: 8px;
+	border-color: transparent;
+	background: none;
+	box-shadow: none;
+	font-weight: 400;
+	cursor: grab;
+}
+
+.palette-item:hover:not(:disabled) {
+	background: var(--control-hover);
+}
+
+.palette-icon {
+	width: 20px;
+	color: var(--muted);
+	font-weight: 600;
+	text-align: center;
+}
+
+/* Место вставки при перетаскивании */
+.editor-preview .drop-before {
+	box-shadow: 0 -3px 0 var(--accent);
+}
+
+.editor-preview .drop-after {
+	box-shadow: 0 3px 0 var(--accent);
+}
+
+.erp-buttons > .drop-before {
+	box-shadow: -3px 0 0 var(--accent);
+}
+
+.erp-buttons > .drop-after {
+	box-shadow: 3px 0 0 var(--accent);
+}
+
+.editor-preview.drop-end .erp-form {
+	box-shadow: inset 0 -3px 0 var(--accent);
+}
+
+.editor-canvas .toolbar {
+	margin: 0 0 12px;
+}
+
+.editor-canvas .toolbar > * {
+	white-space: nowrap;
+}
+
+.editor-dirty {
+	color: var(--attention);
+	font-size: 11px;
+}
+
+.editor-preview {
+	padding: 18px;
+	border: 1px dashed var(--border);
+	border-radius: var(--radius);
+	background: radial-gradient(circle, var(--canvas-dot) 1px, transparent 1px) 0 0 / 16px 16px;
+}
+
+.editor-preview .erp-form {
+	max-width: 640px;
+	margin: 0 auto;
+}
+
+/* Компоненты в предпросмотре: не редактируются, выбираются щелчком */
+.editor-preview [data-component-index],
+.editor-preview .erp-form > h2 {
+	cursor: pointer;
+	border-radius: 4px;
+	outline: 2px solid transparent;
+	outline-offset: 3px;
+}
+
+.editor-preview [data-component-index] * {
+	pointer-events: none;
+}
+
+.editor-preview [data-component-index]:hover,
+.editor-preview .erp-form > h2:hover {
+	outline-color: var(--outline-hover);
+}
+
+.editor-preview .is-selected,
+.editor-preview .is-selected:hover,
+.editor-preview .erp-form > h2.is-selected {
+	outline-color: var(--accent);
+}
+
+.erp-hidden-preview {
+	margin: 0;
+	padding: 3px 8px;
+	border: 1px dashed var(--border);
+	border-radius: 6px;
+	color: var(--muted);
+	font-size: 0.85rem;
+}
+
+.editor-empty {
+	margin: 0;
+	color: var(--muted);
+}
+
+.editor-props {
+	position: sticky;
+	top: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 12px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: var(--shadow-card);
+}
+
+.editor-props h3 {
+	margin: 0;
+	padding-bottom: 8px;
+	border-bottom: 1px solid var(--border-muted);
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.editor-props-tools {
+	display: flex;
+	gap: 5px;
+}
+
+.editor-props-tools .danger {
+	margin-left: auto;
+}
+
+.editor-hint {
+	margin: 0;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 400;
+}
+
+.editor-props .erp-field .editor-hint {
+	margin-top: 2px;
+}
+
+button.link, button.link:hover:not(:disabled) {
+	align-self: flex-start;
+	min-height: 0;
+	padding: 0;
+	border: none;
+	background: none;
+	box-shadow: none;
+	color: var(--accent);
+	font-weight: 400;
+}
+
+button.link:hover:not(:disabled) {
+	text-decoration: underline;
+}
+
+.toolbar {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	margin-top: 12px;
+}
+
+.toolbar .spacer {
+	flex: 1;
+}
+
+/* Узкий экран: колонки сужаются, затем компоненты уходят наверх, затем меню форм над содержимым и всё в одну колонку */
+@media (max-width: 1200px) {
+	.editor {
+		grid-template-columns: 180px minmax(0, 1fr) 260px;
+		gap: 12px;
+	}
+
+	.sidebar {
+		flex-basis: 220px;
+	}
+}
+
+@media (max-width: 1000px) {
+	.editor {
+		grid-template-columns: minmax(0, 1fr) 260px;
+	}
+
+	.editor.menu-editor {
+		grid-template-columns: minmax(0, 1fr) 260px;
+	}
+
+	.editor-palette {
+		position: static;
+		grid-column: 1 / -1;
+	}
+
+	#palette {
+		flex-direction: row;
+		flex-wrap: wrap;
+	}
+}
+
+@media (max-width: 760px) {
+	.shell {
+		flex-direction: column;
+	}
+
+	.sidebar {
+		flex-basis: auto;
+		border-right: none;
+		border-bottom: 1px solid var(--border);
+	}
+}
+
+@media (max-width: 640px) {
+	.editor, .editor.menu-editor {
+		grid-template-columns: 1fr;
+	}
+
+	.editor-props {
+		position: static;
+	}
+}
+
+/* Таблица с пагинацией */
+#app:has(.erp-grid) {
+	max-width: 1040px;
+}
+
+#app:has(.erp-columns) {
+	max-width: 1140px;
+}
+
+/* Колонки формы (options.column): первая уже остальных, на узком экране — друг под другом */
+.erp-columns {
+	display: grid;
+	grid-template-columns: var(--erp-columns-template, 1fr);
+	gap: 18px;
+	align-self: stretch;
+	align-items: start;
+}
+
+.erp-column {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 9px;
+	min-width: 0;
+}
+
+.erp-column > .erp-grid {
+	margin-top: 0;
+}
+
+@media (max-width: 760px) {
+	.erp-columns {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Таблица: в рамке, серая шапка, подсветка строки */
+.erp-grid {
+	align-self: stretch;
+	margin-top: 3px;
+}
+
+.erp-grid h3, .erp-tree h3 {
+	margin: 0 0 6px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.erp-grid-body {
+	overflow-x: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	color: var(--muted);
+}
+
+.erp-grid table {
+	width: 100%;
+	border-collapse: collapse;
+	color: var(--text);
+	font-size: 13px;
+}
+
+.erp-grid th, .erp-grid td {
+	height: 40px;
+	padding: 0 9px;
+	border-top: 1px solid var(--border-muted);
+	text-align: left;
+	white-space: nowrap;
+}
+
+.erp-grid tr:first-child th {
+	border-top: none;
+}
+
+.erp-grid th {
+	height: 32px;
+	background: var(--control-bg);
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.erp-grid tbody tr:first-child td {
+	border-top: none;
+}
+
+.erp-grid tbody tr:hover td {
+	background: var(--row-hover);
+}
+
+.erp-grid .cell-number, .erp-grid .cell-money {
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+/* Постраничная навигация: кнопки без рамки, как в Primer */
+.erp-pager {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 3px;
+	align-items: center;
+	margin-top: 8px;
+}
+
+/* Таблица внизу формы: от таблицы до навигации и от навигации до нижней границы формы — поровну */
+.erp-form:has(> .erp-grid:last-child) {
+	padding-bottom: 8px;
+}
+
+.erp-form .erp-pager button {
+	min-height: 24px;
+	padding: 0 8px;
+	border-color: transparent;
+	background: none;
+	box-shadow: none;
+	color: var(--accent);
+	font-weight: 400;
+}
+
+.erp-form .erp-pager button:hover:not(:disabled) {
+	border-color: var(--border);
+	background: none;
+}
+
+.erp-form .erp-pager button:disabled {
+	color: var(--muted);
+	opacity: 0.5;
+}
+
+.erp-form .erp-pager .erp-pager-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	min-height: 26px;
+	padding: 0;
+	border-radius: var(--radius);
+}
+
+.erp-form .erp-pager .erp-pager-button:hover:not(:disabled) {
+	border-color: transparent;
+	background: var(--hover-bg);
+}
+
+.erp-pager-button svg {
+	display: block;
+}
+
+.erp-pager span {
+	padding: 0 6px;
+	color: var(--muted);
+	font-size: 11px;
+}
+
+/* Метки статусов: цветная обводка, как Label в Primer */
+.badge {
+	display: inline-block;
+	padding: 0 7px;
+	border: 1px solid var(--border);
+	border-radius: 2em;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+/* Тон метки — из данных (pgerp.ui_badge): neutral, accent, attention, success, done, danger */
+.badge-tone-accent {
+	border-color: var(--badge-accent);
+	color: var(--accent);
+}
+
+.badge-tone-attention {
+	border-color: var(--badge-attention);
+	color: var(--attention);
+}
+
+.badge-tone-success {
+	border-color: var(--badge-success);
+	color: var(--success);
+}
+
+.badge-tone-done {
+	border-color: var(--badge-done);
+	color: var(--done);
+}
+
+.badge-tone-danger {
+	border-color: var(--danger);
+	color: var(--danger);
+}
+
+.erp-buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+/* Форма в модальном окне */
+dialog.erp-modal {
+	width: min(440px, calc(100vw - 32px));
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-overlay);
+	background: transparent;
+	box-shadow: var(--shadow-overlay);
+}
+
+/* Карточка с таблицами или колонками — шире */
+dialog.erp-modal:has(.erp-grid, .erp-columns) {
+	width: min(860px, calc(100vw - 32px));
+}
+
+dialog.erp-modal::backdrop {
+	background: var(--backdrop);
+}
+
+dialog.erp-modal .erp-form {
+	border: none;
+	border-radius: var(--radius-overlay);
+	box-shadow: none;
+}
+
+/* Крестик — по центру строки заголовка: отступ формы сверху (15px) + половина строки h2 (16px × 1.4) − половина кнопки */
+.erp-modal-close, .erp-modal-close:hover:not(:disabled) {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	min-height: 28px;
+	padding: 0;
+	border-radius: var(--radius);
+	border: none;
+	background: transparent;
+	box-shadow: none;
+	color: var(--muted);
+	font-size: 13px;
+}
+
+.erp-modal-close:hover:not(:disabled) {
+	background: var(--control-hover);
+	color: var(--text);
+}
+
+/* В ряду кнопок первая — основная, остальные — обычные */
+.erp-form .erp-buttons button + button {
+	border-color: var(--border);
+	background: var(--control-bg);
+	color: var(--text);
+}
+
+.erp-form .erp-buttons button + button:hover:not(:disabled) {
+	background: var(--control-hover);
+}
+
+/* Редактор: действие и просмотр кода */
+.action-cell {
+	display: flex;
+	gap: 3px;
+}
+
+.action-cell select {
+	flex: 1;
+	/* Длинное имя действия не выталкивает кнопку «{ }» за край панели свойств */
+	min-width: 0;
+}
+
+.action-cell button {
+	flex: none;
+}
+
+.action-cell button {
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 0.85rem;
+}
+
+dialog.code-view {
+	width: min(900px, calc(100vw - 32px));
+	max-height: calc(100vh - 64px);
+	padding: 15px;
+	border: none;
+	border-radius: var(--radius-overlay);
+	box-shadow: var(--shadow-overlay);
+	box-sizing: border-box;
+}
+
+dialog.code-view[open] {
+	display: flex;
+	flex-direction: column;
+}
+
+dialog.code-view::backdrop {
+	background: var(--backdrop-strong);
+}
+
+dialog.code-view h3 {
+	margin: 0;
+	font-family: ui-monospace, "SF Mono", Menlo, monospace;
+	font-size: 1rem;
+}
+
+dialog.code-view header p {
+	margin: 3px 0 9px;
+	color: var(--muted);
+}
+
+dialog.code-view pre {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	margin: 0;
+	padding: 9px 10px;
+	background: var(--control-bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	font: 12px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	tab-size: 4;
+}
+
+.sql-keyword {
+	color: var(--code-keyword);
+	font-weight: 600;
+}
+
+.sql-string {
+	color: var(--code-string);
+}
+
+.sql-comment {
+	color: var(--code-comment);
+	font-style: italic;
+}
+
+.sql-dollar {
+	color: var(--code-dollar);
+}
+
+.sql-number {
+	color: var(--code-number);
+}
+
+.sql-type {
+	color: var(--code-type);
+}
+
+.sql-function {
+	color: var(--code-function);
+}
+
+/* Подтверждение и действия в строках таблицы */
+dialog.message p {
+	white-space: pre-line;
+}
+
+dialog.message-confirm form {
+	display: flex;
+	justify-content: flex-end;
+	gap: 6px;
+}
+
+button.danger-fill, button.danger-fill:hover:not(:disabled) {
+	border-color: var(--border-emphasis);
+	background: var(--danger-emphasis);
+	color: var(--on-emphasis);
+}
+
+button.danger-fill:hover:not(:disabled) {
+	background: var(--danger-emphasis-hover);
+}
+
+.erp-grid .cell-actions {
+	text-align: right;
+	width: 1%;
+}
+
+/* Действия в строке: компактные кнопки без рамки */
+.erp-form .erp-grid button.row-action {
+	min-height: 24px;
+	padding: 0 6px;
+	border-color: transparent;
+	background: none;
+	box-shadow: none;
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 500;
+}
+
+.erp-form .erp-grid button.row-action:hover:not(:disabled) {
+	background: var(--accent-subtle);
+}
+
+.erp-form .erp-grid button.row-action-danger {
+	color: var(--danger);
+}
+
+.erp-form .erp-grid button.row-action-danger:hover:not(:disabled) {
+	background: var(--danger-subtle);
+}
+
+/* Сортировка по колонкам */
+.erp-form .erp-grid button.sort-header, .erp-form .erp-grid button.sort-header:hover:not(:disabled) {
+	gap: 3px;
+	min-height: 0;
+	padding: 0;
+	border: none;
+	background: none;
+	box-shadow: none;
+	color: inherit;
+	font: inherit;
+}
+
+.erp-form .erp-grid button.sort-header:hover {
+	color: var(--text);
+}
+
+.erp-grid th[aria-sort="ascending"], .erp-grid th[aria-sort="descending"] {
+	color: var(--text);
+}
+
+.sort-arrow {
+	display: inline-block;
+	width: 0.8em;
+	font-size: 0.7rem;
+}
+
+/* Текстовые колонки переносятся, чтобы кнопки строки помещались */
+.erp-grid td.cell-text {
+	white-space: normal;
+}
+
+.erp-grid td.cell-actions button + button {
+	margin-left: 3px;
+}
+
+/* Поле выбора из справочника */
+.lookup-row {
+	display: flex;
+	gap: 5px;
+}
+
+.lookup-row input {
+	flex: 1;
+	min-width: 0;
+	cursor: default;
+}
+
+.erp-form .lookup-row button.lookup-button {
+	width: 32px;
+	padding: 0;
+	border-color: var(--border);
+	background: var(--control-bg);
+	color: var(--text);
+	font-weight: 600;
+}
+
+.erp-form .lookup-row button.lookup-button:hover:not(:disabled) {
+	background: var(--control-hover);
+}
+
+/* Модальная форма с таблицами (мастер-детали, списки выбора) шире обычной */
+dialog.erp-modal:has(.erp-grid) {
+	width: min(860px, calc(100vw - 32px));
+}
+
+dialog.erp-modal:has(.erp-columns) {
+	width: min(1040px, calc(100vw - 32px));
+}
+
+dialog.erp-modal .erp-form {
+	max-height: calc(100vh - 64px);
+	overflow-y: auto;
+	box-sizing: border-box;
+}
+
+/* Режим выбора */
+.erp-grid tr.selectable {
+	cursor: pointer;
+}
+
+.erp-grid tr.selectable:hover td {
+	background: var(--accent-subtle);
+}
+
+.erp-form .erp-grid button.row-action-primary, .erp-form .erp-grid button.row-action-primary:hover:not(:disabled) {
+	border-color: var(--border-emphasis);
+	background: var(--accent-emphasis);
+	color: var(--on-emphasis);
+}
+
+/* Вкладки */
+.erp-tabs {
+	align-self: stretch;
+	margin-top: 3px;
+}
+
+/* Вкладки: подчёркивание активной (UnderlineNav) */
+.erp-tablist {
+	display: flex;
+	gap: 6px;
+	/* Линия под вкладками — тенью внутри контейнера: overflow обрезал бы выступающую линию */
+	box-shadow: inset 0 -1px 0 var(--border-muted);
+	overflow-x: auto;
+}
+
+.erp-form .erp-tablist button.erp-tab {
+	position: relative;
+	isolation: isolate;
+	min-height: 48px;
+	padding: 0 6px;
+	border: none;
+	background: none;
+	box-shadow: none;
+	color: var(--text);
+	font-weight: 400;
+}
+
+.erp-form .erp-tablist button.erp-tab:hover:not(:disabled) {
+	background: none;
+}
+
+/* Подложка при наведении — внутри, чтобы не спорить с подчёркиванием */
+.erp-form .erp-tablist button.erp-tab:hover::before {
+	content: '';
+	position: absolute;
+	inset: 8px 0;
+	z-index: -1;
+	border-radius: var(--radius);
+	background: var(--control-hover);
+}
+
+.erp-form .erp-tablist button.erp-tab[aria-selected="true"] {
+	font-weight: 600;
+}
+
+.erp-form .erp-tablist button.erp-tab[aria-selected="true"]::after {
+	content: '';
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 2px;
+	border-radius: 6px;
+	background: var(--accent);
+}
+
+.erp-tab-count:not(:empty) {
+	min-width: 20px;
+	padding: 0 5px;
+	border-radius: 2em;
+	background: var(--counter-bg);
+	color: var(--text);
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 16px;
+	text-align: center;
+}
+
+.erp-tabpanel {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+	padding-top: 12px;
+}
+
+.erp-tabpanel[hidden] {
+	display: none;
+}
+
+.erp-tabpanel .erp-grid {
+	margin-top: 0;
+}
+
+/* Значение только для чтения (display) */
+.erp-display input, .erp-display input:focus {
+	min-height: 0;
+	padding: 0;
+	border: none;
+	background: transparent;
+	box-shadow: none;
+	font-size: 18px;
+	font-weight: 600;
+	font-variant-numeric: tabular-nums;
+	outline: none;
+}
+
+/* Дата с календарём: поле по ширине даты, а не всей формы */
+.erp-date input {
+	align-self: flex-start;
+	min-width: 180px;
+}
+
+/* Поле из клеток (board) */
+.erp-board {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	--erp-cell-size: 26px;
+}
+
+.erp-board-caption {
+	font-size: 0.85rem;
+	color: var(--muted);
+}
+
+.erp-board-grid {
+	display: grid;
+	gap: 2px;
+	padding: 5px;
+	border-radius: 6px;
+	background: #1f2633;
+}
+
+.erp-cell {
+	width: var(--erp-cell-size);
+	height: var(--erp-cell-size);
+	border-radius: 3px;
+	background: #2a3242;
+}
+
+.erp-cell.is-filled {
+	background: linear-gradient(180deg, #4b8fe8, #2f6fde);
+}
+
+.erp-cell.is-active {
+	background: linear-gradient(180deg, #ffb547, #f08c00);
+	box-shadow: 0 0 6px rgb(240 140 0 / 0.6);
+}
+
+/* Дерево (tree) — в стиле файлового дерева GitHub */
+.erp-tree {
+	align-self: stretch;
+	--tree-row: 32px;
+	--tree-indent: 12px;
+	/* Отступ уровня и строки слева: от него считаются шеврон, направляющие и полоса выбора */
+	--tree-pad: 6px;
+	--tree-fg: var(--text);
+	--tree-muted: var(--muted);
+	--tree-folder: var(--folder);
+	--tree-hover: var(--hover-bg);
+	--tree-selected: var(--selected-bg);
+	--tree-accent: var(--accent);
+	--tree-line: var(--border);
+	color: var(--tree-fg);
+	font-size: 13px;
+}
+
+.erp-tree > .erp-tree-level {
+	max-height: 400px;
+	overflow: auto;
+	padding: 3px var(--tree-pad);
+}
+
+.erp-tree-level {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.erp-tree-row {
+	position: relative;
+	display: flex;
+	gap: 5px;
+	align-items: center;
+	height: var(--tree-row);
+	padding: 0 6px 0 calc(var(--tree-pad) + var(--depth, 0) * var(--tree-indent));
+	border-radius: 6px;
+	line-height: 18px;
+	cursor: pointer;
+	user-select: none;
+}
+
+.erp-tree-row:hover {
+	background: var(--tree-hover);
+}
+
+/* Соединительные линии: от шеврона родителя вниз — вертикаль, к каждому потомку — отвод вправо;
+   у последнего потомка вертикаль заканчивается на его строке. Линия потомка рисуется на его элементе списка
+   (li со всем поддеревом), поэтому у раскрытых соседей она идёт без разрывов. Ось — центр шеврона родителя */
+.erp-tree-level .erp-tree-level > li {
+	--tree-axis: calc(var(--tree-pad) + (var(--depth) - 1) * var(--tree-indent) + 7.5px);
+	position: relative;
+}
+
+.erp-tree-level .erp-tree-level > li::before,
+.erp-tree-level .erp-tree-level > li::after {
+	content: '';
+	position: absolute;
+	z-index: 1;
+	left: var(--tree-axis);
+	background: var(--tree-line);
+	pointer-events: none;
+}
+
+/* Вертикаль: от низа шеврона родителя (половина строки выше) до низа своего поддерева */
+.erp-tree-level .erp-tree-level > li::before {
+	top: calc(var(--tree-row) / -2 + 6px);
+	bottom: 0;
+	width: 1px;
+}
+
+.erp-tree-level .erp-tree-level > li:last-child::before {
+	bottom: auto;
+	height: calc(var(--tree-row) - 6px);
+}
+
+/* Отвод: к шеврону своей группы, у конечного узла — через пустое место шеврона до значка */
+.erp-tree-level .erp-tree-level > li::after {
+	top: calc(var(--tree-row) / 2);
+	width: calc(var(--tree-indent) - 4px);
+	height: 1px;
+}
+
+.erp-tree-level .erp-tree-level > li:not([aria-expanded])::after {
+	width: calc(var(--tree-indent) + 12px);
+}
+
+/* Выбранный узел: серая подложка и синяя полоса слева, текст не выделяется */
+[aria-selected="true"] > .erp-tree-row {
+	background: var(--tree-selected);
+}
+
+[aria-selected="true"] > .erp-tree-row::after {
+	content: '';
+	position: absolute;
+	/* у края дерева, в поле отступа уровня — иначе её обрезает прокрутка */
+	left: calc(-1 * var(--tree-pad));
+	top: calc(50% - 12px);
+	width: 4px;
+	height: 22px;
+	border-radius: 6px;
+	background: var(--tree-accent);
+}
+
+.erp-tree-row:focus {
+	outline: none;
+}
+
+.erp-tree-row:focus-visible {
+	outline: 2px solid var(--tree-accent);
+	outline-offset: -2px;
+}
+
+/* Шеврон: небольшой серый, поворачивается при раскрытии */
+.erp-tree-toggle {
+	display: grid;
+	place-items: center;
+	width: 16px;
+	height: 16px;
+	flex-shrink: 0;
+	color: var(--tree-muted);
+}
+
+[aria-expanded] > .erp-tree-row .erp-tree-toggle::before {
+	content: '';
+	width: 5px;
+	height: 5px;
+	margin-left: -2px;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	transform: rotate(-45deg);
+	transition: transform 0.12s ease;
+}
+
+[aria-expanded="true"] > .erp-tree-row .erp-tree-toggle::before {
+	margin: -2px 0 0;
+	transform: rotate(45deg);
+}
+
+/* Загрузка детей: кольцо вместо шеврона */
+.is-loading > .erp-tree-row .erp-tree-toggle::before {
+	width: 10px;
+	height: 10px;
+	margin: 0;
+	border: 1.5px solid var(--tree-line);
+	border-top-color: var(--tree-accent);
+	border-radius: 50%;
+	transform: none;
+	animation: erp-tree-spin 0.7s linear infinite;
+}
+
+@keyframes erp-tree-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.erp-tree-icon {
+	display: grid;
+	place-items: center;
+	flex-shrink: 0;
+	color: var(--tree-folder);
+}
+
+.erp-tree-icon.is-file {
+	color: var(--tree-muted);
+}
+
+.erp-tree-label {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.erp-tree-empty {
+	padding: 5px 9px;
+	color: var(--tree-muted);
+}
+
+.erp-form .erp-tree-row button.erp-tree-choose {
+	padding: 0 9px;
+	height: 22px;
+	border-radius: 6px;
+	font-size: 11px;
+	font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.erp-tree-row::before,
+	[aria-expanded] > .erp-tree-row .erp-tree-toggle::before {
+		transition: none;
+	}
+}
+
+/* Очистка поля выбора */
+.erp-form .lookup-row button.lookup-clear {
+	color: var(--muted);
+}
+
+/* Пользователь в шапке: имя, «Сменить пароль», «Выйти» — справа */
+.topbar-user {
+	display: flex;
+	gap: 12px;
+	align-items: center;
+	margin-left: auto;
+	font-size: 13px;
+}
+
+.topbar-user-name {
+	color: var(--text);
+	font-weight: 600;
+}
+
+/* Общее правило button.link:hover прижимает кнопку к верху (align-self: flex-start) —
+   в шапке кнопки остаются по центру и при наведении */
+.topbar-user button.link,
+.topbar-user button.link:hover:not(:disabled) {
+	align-self: center;
+}
+
+/* Кнопка «Сообщения» в шапке: число сообщений рядом, при открытой панели — подчёркнута */
+.topbar-messages {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+
+.topbar-messages.active {
+	text-decoration: underline;
+	text-underline-offset: 4px;
+}
+
+.topbar-badge {
+	min-width: 18px;
+	padding: 0 5px;
+	box-sizing: border-box;
+	border-radius: 9px;
+	background: var(--control-hover);
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 16px;
+	text-align: center;
+}
+
+.topbar-badge[hidden] {
+	display: none;
+}
+
+/* Страница входа */
+.login {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	box-sizing: border-box;
+	width: min(360px, 100% - 32px);
+	margin: 12vh auto 0;
+	padding: 18px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--surface);
+	box-shadow: var(--shadow-card);
+}
+
+.login h1 {
+	margin: 0;
+	font-size: 16px;
+}
+
+.login button[type=submit] {
+	align-self: stretch;
+}
+
+.login-error {
+	margin: 0;
+	color: var(--danger);
+}
+
+/* Переключатели темы и языка в шапке */
+.topbar-user select.topbar-select {
+	min-height: 24px;
+	padding: 2px 6px;
+	font-size: 13px;
+}
+
+/* Редактор функции действия: поля, заголовок CREATE FUNCTION, тело, ошибка компиляции */
+dialog.function-editor {
+	width: min(1040px, calc(100vw - 32px));
+	height: calc(100vh - 64px);
+	gap: 6px;
+}
+
+.function-editor-fields {
+	display: grid;
+	grid-template-columns: minmax(180px, 1fr) minmax(200px, 2fr) 120px 140px;
+	gap: 9px;
+	margin-bottom: 3px;
+}
+
+.function-signature {
+	color: var(--text);
+	font: 13px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.function-code {
+	position: relative;
+	flex: 1;
+	min-height: 200px;
+	overflow: hidden;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--control-bg);
+}
+
+.function-code:focus-within {
+	border-color: var(--accent);
+	outline: 2px solid var(--accent);
+	outline-offset: -1px;
+}
+
+/* Слои должны совпадать до пикселя: одинаковые шрифт, отступы, перенос */
+.function-code > pre.function-highlight,
+.function-code > textarea.function-body {
+	position: absolute;
+	inset: 0;
+	box-sizing: border-box;
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	padding: 9px 10px;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	font: 13px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	letter-spacing: normal;
+	tab-size: 4;
+	white-space: pre;
+	overflow-wrap: normal;
+}
+
+.function-code > pre.function-highlight {
+	overflow: hidden;
+	pointer-events: none;
+	color: var(--text);
+}
+
+.function-code > textarea.function-body {
+	overflow: auto;
+	resize: none;
+	outline: none;
+	color: transparent;
+	-webkit-text-fill-color: transparent;
+	caret-color: var(--text);
+}
+
+.function-code > textarea.function-body::selection {
+	background: var(--code-selection);
+}
+
+.function-error {
+	margin: 0;
+	padding: 6px 9px;
+	border-radius: var(--radius);
+	background: var(--danger-subtle);
+	color: var(--danger);
+	white-space: pre-wrap;
+}
+
+.function-status {
+	color: var(--success);
+}
+
+/* Жирный и курсив могут сдвинуть символы относительно курсора — в поле правки (и рядом, в заголовке) только цвет */
+.function-code .sql-keyword,
+.function-code .sql-comment,
+.function-signature .sql-keyword {
+	font-weight: inherit;
+	font-style: inherit;
+}
+
+/* Панель сообщений ui_print («Сообщить»): внизу экрана, при открытой модальной форме — внутри неё */
+.messages-panel {
+	position: fixed;
+	inset: auto 0 0 0;
+	z-index: 10;
+	box-sizing: border-box;
+	border-top: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	box-shadow: 0 -4px 16px rgb(0 0 0 / 0.08);
+}
+
+.messages-panel[hidden] {
+	display: none;
+}
+
+.messages-panel.messages-inline {
+	position: static;
+	border-radius: 0 0 var(--radius-overlay) var(--radius-overlay);
+	box-shadow: none;
+}
+
+.messages-inline .messages-list {
+	max-height: 160px;
+}
+
+dialog.erp-modal:has(> .messages-panel:not([hidden])) .erp-form {
+	border-bottom-left-radius: 0;
+	border-bottom-right-radius: 0;
+}
+
+.messages-panel header {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	padding: 3px 6px 3px 12px;
+	border-bottom: 1px solid var(--border);
+}
+
+/* Общее правило button.link прижимает кнопку к верху — в заголовке панели она по центру */
+.messages-panel header button.link,
+.messages-panel header button.link:hover:not(:disabled) {
+	align-self: center;
+}
+
+.messages-panel h3 {
+	margin: 0;
+	font-size: 12px;
+}
+
+.messages-count {
+	color: var(--muted);
+	font-weight: normal;
+}
+
+.messages-panel .spacer {
+	flex: 1;
+}
+
+.messages-close {
+	padding: 0 6px;
+	border: 0;
+	background: none;
+	color: var(--muted);
+	font-size: 16px;
+	line-height: 24px;
+	cursor: pointer;
+}
+
+.messages-close:hover {
+	color: var(--text);
+}
+
+.messages-list {
+	max-height: 30vh;
+	overflow: auto;
+	margin: 0;
+	padding: 3px 0;
+	list-style: none;
+	font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.messages-empty {
+	padding: 2px 12px;
+	color: var(--muted);
+	font-family: system-ui, sans-serif;
+}
+
+.messages-item {
+	display: flex;
+	gap: 9px;
+	padding: 2px 12px;
+	border-left: 3px solid transparent;
+}
+
+.messages-item time {
+	flex: none;
+	color: var(--muted);
+}
+
+.messages-item span {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	user-select: text;
+}
+
+.messages-warning {
+	border-left-color: var(--warning);
+	color: var(--warning);
+}
+
+.messages-error {
+	border-left-color: var(--danger);
+	color: var(--danger);
+}
+
+/* Окно отчёта PDF: встроенный просмотрщик браузера */
+dialog.report-viewer {
+	width: min(1100px, calc(100vw - 32px));
+	height: calc(100vh - 48px);
+	max-height: none;
+	gap: 9px;
+}
+
+dialog.report-viewer .toolbar {
+	margin: 0;
+}
+
+.report-frame {
+	flex: 1;
+	width: 100%;
+	min-height: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--control-bg);
+}
+
+/* Редактор отчётов: шаблон выбранного отчёта */
+.editor.report-editor {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+/* Отчёты в боковой панели редактора — под пунктом «Отчёты» */
+.sidebar-sublist {
+	margin: 2px 0 0 9px;
+	font-size: 13px;
+}
+
+.report-canvas {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	min-width: 0;
+}
+
+.report-canvas .toolbar {
+	margin: 0;
+	flex-wrap: wrap;
+}
+
+.report-heading {
+	margin: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.report-fields {
+	display: grid;
+	grid-template-columns: minmax(140px, 1fr) minmax(180px, 1.4fr) minmax(220px, 2fr) minmax(160px, 1fr);
+	gap: 9px;
+	align-items: start;
+}
+
+.report-fields .erp-field {
+	margin: 0;
+}
+
+.report-fields .action-cell select {
+	min-width: 0;
+	flex: 1;
+}
+
+.report-error {
+	margin: 0;
+	max-height: 160px;
+	overflow: auto;
+	font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.function-code.report-code {
+	flex: none;
+	height: max(320px, calc(100vh - 330px));
+}
+
+dialog.report-viewer h3,
+dialog.grid-columns-editor h3 {
+	font-family: inherit;
+	font-size: 1rem;
+}
+
+/* Окно «Колонки таблицы» в редакторе форм */
+dialog.grid-columns-editor {
+	width: min(980px, calc(100vw - 32px));
+	gap: 6px;
+	overflow: auto;
+}
+
+.grid-columns-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.grid-columns-table th {
+	padding: 3px 5px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+	text-align: left;
+}
+
+.grid-columns-table td {
+	padding: 2px 5px;
+	vertical-align: middle;
+}
+
+.grid-columns-table select,
+.grid-columns-table input:not([type="checkbox"]) {
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.grid-columns-table td:nth-child(2) {
+	width: 26%;
+}
+
+.grid-columns-table td:nth-child(3) {
+	width: 34%;
+}
+
+.grid-columns-order {
+	white-space: nowrap;
+}
+
+.grid-columns-order button + button {
+	margin-left: 3px;
+}
+
+.grid-columns-sort {
+	display: flex;
+	justify-content: center;
+}
+
+.grid-columns-table td:nth-child(5),
+.grid-columns-table th:nth-child(5) {
+	text-align: center;
+}
+
+.grid-columns-tools {
+	margin: 3px 0 6px;
+}
+
+dialog.grid-columns-editor h4 {
+	margin: 6px 0 0;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.grid-columns-preview {
+	overflow: auto;
+	max-height: 220px;
+}
+
+/* ---------------------------------------------------------------------
+   Разработка решений: фильтр «Решение», разделы «Решения», «Схема данных», «SQL-консоль», «Доступ MCP»
+   --------------------------------------------------------------------- */
+.sidebar-filter {
+	margin: 0 6px 9px;
+}
+
+.sidebar-filter select {
+	width: 100%;
+}
+
+.dev-canvas {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	min-width: 0;
+}
+
+.dev-canvas > .toolbar {
+	margin: 0;
+	flex-wrap: wrap;
+}
+
+.dev-fields {
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+.dev-section {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 9px 12px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+
+.dev-section h4 {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.dev-section h5 {
+	margin: 3px 0 0;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.toolbar.dev-inline {
+	margin: 0;
+	flex-wrap: wrap;
+}
+
+.dev-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.dev-table th {
+	padding: 3px 5px;
+	border-bottom: 1px solid var(--border-muted);
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 600;
+	text-align: left;
+	white-space: nowrap;
+}
+
+.dev-table td {
+	padding: 3px 5px;
+	border-bottom: 1px solid var(--border-muted);
+	vertical-align: middle;
+}
+
+.dev-table tbody tr:last-child td {
+	border-bottom: none;
+}
+
+.dev-table code {
+	font-size: 11px;
+}
+
+.dev-table.dev-keys thead {
+	display: none;
+}
+
+.dev-table.dev-keys td:first-child {
+	width: 30%;
+}
+
+.dev-table.dev-keys td:last-child,
+.dev-table td:has(> .dev-row-tools) {
+	width: 1%;
+	white-space: nowrap;
+	text-align: right;
+}
+
+.dev-columns input:not([type="checkbox"]) {
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.dev-columns td:first-child,
+.dev-columns td:nth-child(4) {
+	width: 1%;
+	text-align: center;
+}
+
+.dev-row-tools {
+	display: inline-flex;
+	gap: 3px;
+}
+
+.dev-check {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	white-space: nowrap;
+}
+
+.dev-number {
+	width: 80px;
+}
+
+.dev-keys-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+	gap: 9px;
+}
+
+.dev-chip {
+	display: inline-block;
+	margin: 2px 5px 2px 0;
+	padding: 1px 5px;
+	border-radius: var(--radius);
+	background: var(--counter-bg);
+}
+
+pre.dev-sql {
+	max-height: 480px;
+	overflow: auto;
+	margin: 0;
+	padding: 9px 10px;
+	background: var(--control-bg);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	font: 12px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	tab-size: 4;
+}
+
+.dev-changes,
+.dev-warnings {
+	margin: 0;
+	padding-left: 15px;
+}
+
+.dev-warnings {
+	color: var(--attention);
+}
+
+.dev-release-form {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 9px;
+	align-items: end;
+}
+
+.dev-release-form .erp-field {
+	flex: 1 1 280px;
+	margin: 0;
+}
+
+.dev-release-out {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+/* Схема данных: список таблиц и представлений | конструктор */
+.editor.schema-editor {
+	grid-template-columns: 220px minmax(0, 1fr);
+}
+
+.dev-list {
+	position: sticky;
+	top: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: calc(100vh - 120px);
+	overflow: auto;
+}
+
+.dev-list .sidebar-title {
+	margin: 6px 0 0;
+}
+
+.function-code.dev-view-code {
+	flex: none;
+	height: max(240px, calc(100vh - 420px));
+}
+
+/* SQL-консоль */
+.dev-tabs button.erp-tab {
+	min-height: 40px;
+	padding: 0 6px;
+	border: none;
+	border-radius: 0;
+	background: none;
+	box-shadow: none;
+	color: var(--muted);
+	font-weight: 400;
+}
+
+.dev-tabs button.erp-tab[aria-selected="true"] {
+	color: var(--text);
+	font-weight: 600;
+	box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.dev-console {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.function-code.dev-console-code {
+	flex: none;
+	height: 220px;
+	resize: vertical;
+}
+
+.function-code.dev-json-code {
+	flex: none;
+	height: 140px;
+}
+
+.dev-result-scroll {
+	max-height: calc(100vh - 460px);
+	min-height: 120px;
+	overflow: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+}
+
+.dev-rows th {
+	position: sticky;
+	top: 0;
+	background: var(--surface);
+}
+
+.dev-rows td {
+	font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+	white-space: pre;
+}
+
+.dev-null {
+	color: var(--muted);
+	font-style: italic;
+}
+
+pre.dev-json {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* Доступ MCP */
+.dev-token {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	padding: 6px 9px;
+	border: 1px solid var(--attention);
+	border-radius: var(--radius);
+	background: var(--control-bg);
+}
+
+.dev-token code,
+.dev-snippet {
+	overflow-wrap: anywhere;
+	font-size: 11px;
+}
+
+.dev-snippet {
+	flex: 1;
+	padding: 5px 8px;
+	border-radius: var(--radius);
+	background: var(--control-bg);
+}
+
+@media (max-width: 1000px) {
+	.editor.schema-editor {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.dev-list {
+		position: static;
+		max-height: none;
+	}
+}
+
+.dev-columns td:nth-child(2) {
+	width: 18%;
+}
+
+.dev-columns td:nth-child(3) {
+	width: 22%;
+}
+
+/* Длинные строки (команда подключения, путь) переносятся внутри строки инструментов */
+.editor-canvas .toolbar > .dev-snippet,
+.editor-canvas .toolbar > code {
+	min-width: 0;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+/* Пояснение окна SQL — с переводами строк (список изменений выпуска) */
+dialog.code-view header p {
+	white-space: pre-line;
+}
+
+/* Пакеты решений: окно первого входа администратора и «Решения → Установить решения» */
+dialog.packages-dialog h3 {
+	font-family: inherit;
+	font-size: 1rem;
+}
+
+.packages-body {
+	flex: 1;
+	min-height: 0;
+	overflow: auto;
+	margin-bottom: 9px;
+}
+
+.packages-table td {
+	vertical-align: top;
+	padding-top: 6px;
+	padding-bottom: 6px;
+}
+
+.packages-table td:nth-last-child(-n+2) {
+	white-space: nowrap;
+}
+
+.packages-about p {
+	margin: 2px 0 0;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.packages-table input:not([type="checkbox"]) {
+	width: 9em;
+}
+
+.packages-reset {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--danger);
+}
+
+/* Графики (chart): SVG по ширине формы, цвета рядов — --chart-0 … --chart-5 */
+.erp-chart {
+	position: relative;
+	align-self: stretch;
+	margin-top: 3px;
+}
+
+.erp-chart h3 {
+	margin: 0 0 6px;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.erp-chart-body {
+	color: var(--muted);
+}
+
+.erp-chart-body svg {
+	display: block;
+	overflow: visible;
+}
+
+.erp-chart-c0 { color: var(--chart-0); }
+.erp-chart-c1 { color: var(--chart-1); }
+.erp-chart-c2 { color: var(--chart-2); }
+.erp-chart-c3 { color: var(--chart-3); }
+.erp-chart-c4 { color: var(--chart-4); }
+.erp-chart-c5 { color: var(--chart-5); }
+
+.erp-chart-grid {
+	stroke: var(--border-muted);
+	stroke-dasharray: 3 3;
+}
+
+.erp-chart-zero {
+	stroke: var(--border);
+}
+
+.erp-chart-axis {
+	fill: var(--muted);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+.erp-chart-band {
+	fill: transparent;
+}
+
+.erp-chart-band.is-hover {
+	fill: var(--hover-bg);
+}
+
+.erp-chart-bar, .erp-chart-slice, .erp-chart-dot {
+	fill: currentColor;
+}
+
+.erp-chart-slice {
+	stroke: var(--surface);
+	stroke-width: 2;
+}
+
+.erp-chart-slice:hover {
+	opacity: 0.85;
+}
+
+.erp-chart-line {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+
+.erp-chart-area {
+	fill: currentColor;
+	opacity: 0.18;
+}
+
+.erp-chart-dot {
+	stroke: var(--surface);
+	stroke-width: 1.5;
+}
+
+.erp-chart-legend {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	margin-top: 6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.erp-chart-legend:empty {
+	display: none;
+}
+
+.erp-chart-legend i, .erp-chart-tooltip i {
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin-right: 5px;
+	border-radius: 2px;
+	background: currentColor;
+	vertical-align: -1px;
+}
+
+.erp-chart-tooltip {
+	position: absolute;
+	z-index: 2;
+	padding: 6px 9px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--surface);
+	box-shadow: var(--shadow-overlay);
+	color: var(--text);
+	font-size: 12px;
+	white-space: nowrap;
+	pointer-events: none;
+}
+
+.erp-chart-tooltip strong {
+	display: block;
+	margin-bottom: 2px;
+}
+
+.erp-chart-tooltip div {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Таблица и дерево в редакторе форм: настоящие данные только для просмотра — щелчок выбирает компонент */
+.erp-grid.is-preview .erp-grid-body, .erp-grid.is-preview .erp-pager, .erp-tree.is-preview .erp-tree-level {
+	pointer-events: none;
+}
+
+.erp-grid.is-preview .erp-pager {
+	color: var(--muted);
+	font-size: 11px;
+}
+
+.erp-grid.is-preview .erp-grid-body:not(:has(table)) {
+	padding: 6px 9px;
+	font-size: 12px;
+}
+
+.erp-tree.is-preview > .erp-tree-level:not(:has(li)) {
+	color: var(--muted);
+	font-size: 12px;
+}

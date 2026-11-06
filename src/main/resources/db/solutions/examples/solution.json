@@ -1,0 +1,9 @@
+{
+  "name": "examples",
+  "title": {"ru": "Примеры", "en": "Examples"},
+  "description": {
+    "ru": "Hello World, деление с проверкой ввода, игра «Падающие блоки», чат во всех вкладках.",
+    "en": "Hello World, division with input checks, a falling blocks game, a chat across all tabs."
+  },
+  "schema": "examples"
+}

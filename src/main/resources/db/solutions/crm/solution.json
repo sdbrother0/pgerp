@@ -1,0 +1,9 @@
+{
+  "name": "crm",
+  "title": {"ru": "CRM", "en": "CRM"},
+  "description": {
+    "ru": "Компании и контакты, сделки по воронке с товарами, задачи и напоминания, роли менеджера и руководителя, отчёты PDF. С демо-данными.",
+    "en": "Companies and contacts, pipeline deals with products, tasks and reminders, manager and head roles, PDF reports. With demo data."
+  },
+  "schema": "crm"
+}

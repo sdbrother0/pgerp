@@ -1,0 +1,6 @@
+{
+  "name": "sample",
+  "title": {"ru": "Образец", "en": "Sample"},
+  "description": "Пакет для тестов установщика",
+  "schema": "sample_schema"
+}
