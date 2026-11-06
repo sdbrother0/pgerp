@@ -115,11 +115,6 @@
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
 			</plugin>
-			<!-- Нативный образ GraalVM: ./mvnw -Pnative native:compile (JAVA_HOME — GraalVM с native-image) -->
-			<plugin>
-				<groupId>org.graalvm.buildtools</groupId>
-				<artifactId>native-maven-plugin</artifactId>
-			</plugin>
 		</plugins>
 	</build>
 

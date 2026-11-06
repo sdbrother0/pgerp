@@ -23,11 +23,8 @@ services:
     #   - "5433:5432"
 
   app:
-    # ERP_DOCKERFILE=Dockerfile.native — нативный образ GraalVM вместо JVM
-    build:
-      context: .
-      dockerfile: ${ERP_DOCKERFILE:-Dockerfile}
-    image: pgerp:${ERP_IMAGE_TAG:-latest}
+    build: .
+    image: pgerp:latest
     restart: unless-stopped
     depends_on:
       db:

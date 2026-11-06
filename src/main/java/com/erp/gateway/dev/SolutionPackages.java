@@ -20,9 +20,6 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
-import org.springframework.aot.hint.RuntimeHints;
-import org.springframework.aot.hint.RuntimeHintsRegistrar;
-import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -44,7 +41,6 @@ import org.springframework.transaction.support.TransactionTemplate;
  * версия) → файлы с версиями больше установленной по порядку → {@code pgerp.solution_install_end}.
  */
 @Service
-@ImportRuntimeHints(SolutionPackages.PackageResources.class)
 public class SolutionPackages {
 
 	public static final String MANIFEST = "solution.json";
@@ -238,16 +234,6 @@ public class SolutionPackages {
 				logger.info("Solution {} updated to release {} (releases {})", p.name(), p.latestVersion(), result.path("applied"));
 			}
 		}
-	}
-
-	/** Нативный образ (GraalVM): файлы пакетов — ресурсы образа. */
-	static class PackageResources implements RuntimeHintsRegistrar {
-
-		@Override
-		public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
-			hints.resources().registerPattern("db/solutions/*/" + MANIFEST).registerPattern("db/solutions/*/V*.sql");
-		}
-
 	}
 
 	private static String read(Resource resource) {
