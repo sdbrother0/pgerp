@@ -36,6 +36,7 @@ Settings (database address, port, path behind a reverse proxy, MCP) are environm
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the platform core: layers, the database–browser contract, solution development,
   MCP server, authentication, translations, themes, migrations and solution packages, deployment
+- [docs/tutorial-hello.md](docs/tutorial-hello.md) — the first step: Hello World, a form with a name field and a button
 - [docs/tutorial-todo.md](docs/tutorial-todo.md) — step by step: a to-do list application from scratch in the editor
 
 ## License

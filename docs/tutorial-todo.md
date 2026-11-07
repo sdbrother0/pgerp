@@ -4,7 +4,7 @@
 
 A step-by-step guide: a "To-do list" application is built entirely in the PgERP editor — table, code, forms, menu,
 permissions — and released as a solution package for other installations. Java does not change: everything lives in PostgreSQL.
-The platform design is described in [ARCHITECTURE.md](../ARCHITECTURE.md); this guide is pure practice.
+The platform design is described in [ARCHITECTURE.md](../ARCHITECTURE.md); this guide is pure practice. New to PgERP? Start with [Hello World](tutorial-hello.md).
 
 The result: every user has their own task list with due dates, search, a "Done" mark, editing and deletion with
 confirmation; overdue tasks are highlighted.

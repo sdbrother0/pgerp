@@ -36,6 +36,7 @@ ERP_DB_PASSWORD=<пароль> ./mvnw spring-boot:run
 
 - [ARCHITECTURE.ru.md](ARCHITECTURE.ru.md) — ядро платформы: слои, контракт базы и браузера, разработка решений,
   MCP-сервер, вход и права, переводы, темы, миграции и пакеты решений, развёртывание
+- [docs/tutorial-hello.ru.md](docs/tutorial-hello.ru.md) — первый шаг: Hello World, форма с полем для имени и кнопкой
 - [docs/tutorial-todo.ru.md](docs/tutorial-todo.ru.md) — по шагам: приложение «Список дел» с нуля в редакторе
 
 ## Лицензия
