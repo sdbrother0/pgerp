@@ -40,4 +40,4 @@ Settings (database address, port, path behind a reverse proxy, MCP) are environm
 
 ## License
 
-Copyright 2026 S. Demin. Licensed under the [Apache License 2.0](LICENSE).
+Copyright 2026 Sergei Demin. Licensed under the [Apache License 2.0](LICENSE).

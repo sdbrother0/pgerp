@@ -40,4 +40,4 @@ ERP_DB_PASSWORD=<пароль> ./mvnw spring-boot:run
 
 ## Лицензия
 
-Copyright 2026 S. Demin. Распространяется по лицензии [Apache License 2.0](LICENSE).
+Copyright 2026 Sergei Demin. Распространяется по лицензии [Apache License 2.0](LICENSE).
