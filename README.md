@@ -27,6 +27,15 @@ from sources (in a clone of the repository) — `docker compose up -d --build`.
 Open http://localhost:8099 and sign in as **admin / admin** (the password must be changed at first sign-in). The
 administrator then chooses which solutions to install: CRM and examples are included.
 
+To start from a clean slate — remove the containers together with the database (the `db-data` volume; all data is
+lost) and start again:
+
+```bash
+docker compose down -v
+docker compose pull
+docker compose up -d
+```
+
 Without Docker — PostgreSQL with an `erp` database and Java 25:
 
 ```bash

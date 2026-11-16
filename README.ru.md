@@ -27,6 +27,15 @@ docker compose up -d
 Откройте http://localhost:8099 и войдите как **admin / admin** (при первом входе пароль нужно сменить). Затем
 администратор выбирает решения для установки: в комплекте CRM и примеры.
 
+Начать с чистого листа — удалить контейнеры вместе с базой (том `db-data`; все данные будут потеряны) и запустить
+заново:
+
+```bash
+docker compose down -v
+docker compose pull
+docker compose up -d
+```
+
 Без Docker — PostgreSQL с базой `erp` и Java 25:
 
 ```bash
