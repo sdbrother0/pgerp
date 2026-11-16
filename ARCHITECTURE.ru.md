@@ -898,13 +898,13 @@ docker run -d --name pgerp-db -p 5432:5432 \
 запускаются — им нужна база), `compose.yaml` запускает приложение вместе с PostgreSQL 18 — базу `erp` создаёт контейнер:
 
 ```bash
-docker compose up -d --build      # http://localhost:8080, admin / admin
+docker compose up -d --build      # http://localhost:8099, admin / admin
 docker compose logs -f app
 docker compose down               # остановить; данные остаются в томе db-data (down -v удаляет их)
 ```
 
 Настройки compose — переменные окружения или файл `.env` рядом с `compose.yaml`: `ERP_PORT` (порт на хосте,
-по умолчанию `8080`), `ERP_DB_PASSWORD` (по умолчанию `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
+по умолчанию `8099`; внутри контейнера приложение слушает `8080`), `ERP_DB_PASSWORD` (по умолчанию `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
 `ERP_MCP_ALLOWED_ORIGINS`. Порт базы наружу не открыт; для psql раскомментируйте `ports` у сервиса `db`.
 Только образ: `docker build -t pgerp .`, затем `docker run -p 8080:8080 -e ERP_DB_URL=… -e ERP_DB_PASSWORD=… pgerp`.
 

@@ -909,13 +909,13 @@ they need a database), `compose.yaml` starts the application together with Postg
 by the container:
 
 ```bash
-docker compose up -d --build      # http://localhost:8080, admin / admin
+docker compose up -d --build      # http://localhost:8099, admin / admin
 docker compose logs -f app
 docker compose down               # stop; data stays in the db-data volume (down -v deletes it)
 ```
 
 Compose settings — environment variables or an `.env` file next to `compose.yaml`: `ERP_PORT` (port on the host,
-default `8080`), `ERP_DB_PASSWORD` (default `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
+default `8099`; inside the container the application listens on `8080`), `ERP_DB_PASSWORD` (default `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
 `ERP_MCP_ALLOWED_ORIGINS`. The database port is not published; uncomment `ports` of the `db` service to connect with psql.
 The image alone: `docker build -t pgerp .`, then `docker run -p 8080:8080 -e ERP_DB_URL=… -e ERP_DB_PASSWORD=… pgerp`.
 
