@@ -1,0 +1,51 @@
+# Сборка и тесты на каждый push в main и pull request.
+# Тестам нужна база PostgreSQL — она поднимается сервисным контейнером.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: erp
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d erp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ERP_DB_URL: jdbc:postgresql://localhost:5432/erp
+      ERP_DB_USER: postgres
+      ERP_DB_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build and test
+        run: ./mvnw -B verify
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pgerp-jar
+          path: target/erp-gateway-*.jar
+          if-no-files-found: error
