@@ -13,11 +13,16 @@ MCP) and released as solution packages — without changing Java.
 
 ## Quick start
 
-With Docker — the application and PostgreSQL 18:
+With Docker — the prebuilt application image and PostgreSQL 18, no sources needed:
 
 ```bash
-docker compose up -d --build
+curl -O https://raw.githubusercontent.com/sdbrother0/pgerp/main/compose.yaml
+docker compose up -d
 ```
+
+The `ghcr.io/sdbrother0/pgerp` image is pulled from GitHub Container Registry. To pin a version instead of the latest —
+`ERP_VERSION=0.1.0 docker compose up -d`; to update — `docker compose pull && docker compose up -d`. To build the image
+from sources (in a clone of the repository) — `docker compose up -d --build`.
 
 Open http://localhost:8080 and sign in as **admin / admin** (the password must be changed at first sign-in). The
 administrator then chooses which solutions to install: CRM and examples are included.
