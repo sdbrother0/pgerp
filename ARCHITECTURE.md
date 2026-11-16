@@ -573,7 +573,9 @@ The client remembers the language in `localStorage` and reloads the page if anot
 texts without a translation for each language (`pgerp.translation_missing_v`). The texts are collected by
 `pgerp.translatable_texts`: metadata (forms, folders, labels, tabs, columns, row buttons, menu, action descriptions,
 roles) and phrase-like string literals (a capital letter followed by a lowercase one) from the function code of the
-application schemas and `pgerp`. Russian translations of core texts are in the core migration, of solution texts — in the
+application schemas and `pgerp`. A code line with a `-- no i18n` comment is skipped — it marks texts that are not shown
+to the user in their language (headings in release files, MCP protocol messages); a phrase to translate is not split
+into several literals, otherwise only its beginning is collected. Russian translations of core texts are in the core migration, of solution texts — in the
 releases of their packages.
 
 

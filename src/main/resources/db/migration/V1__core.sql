@@ -2834,9 +2834,11 @@ FROM (
     FROM pgerp.reports r
     CROSS JOIN LATERAL regexp_matches(r.jrxml, '\$R\{([^}]+)\}', 'g') AS m
     UNION ALL
+    -- Строки кода с комментарием «-- no i18n» пропускаются: заголовки в файлах выпуска, сообщения протокола MCP
     SELECT replace(m[1], '''''', ''''), 'Code: ' || p.proname, 2
     FROM pg_proc p
-    CROSS JOIN LATERAL regexp_matches(p.prosrc, '''((?:[^'']|'''')*)''', 'g') AS m
+    CROSS JOIN LATERAL regexp_matches(regexp_replace(p.prosrc, '[^\n]*--[[:space:]]*no i18n[^\n]*', '', 'g'),
+                                      '''((?:[^'']|'''')*)''', 'g') AS m
     WHERE p.pronamespace = ANY (pgerp.app_schema_oids() || 'pgerp'::regnamespace::OID)
       AND m[1] ~ '^[[:upper:]][[:lower:]]'  -- похоже на фразу: с заглавной буквы, не идентификатор и не SQL
 
@@ -3878,8 +3880,7 @@ BEGIN
                     WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_n->'columns') n WHERE n->>'name' = c->>'name') LOOP
             v_tables := v_tables || format('ALTER TABLE %I DROP COLUMN IF EXISTS %I;', v_name, v_oc->>'name');
             v_changes := v_changes || format('Deleted column %s.%s', v_name, v_oc->>'name');
-            v_warnings := v_warnings || format('Column %s.%s will be deleted with its data. If this is a rename, '
-                                               'do it in the table designer — the release will rename the column', v_name, v_oc->>'name');
+            v_warnings := v_warnings || format('Column %s.%s will be deleted with its data. If this is a rename, do it in the table designer — the release will rename the column', v_name, v_oc->>'name');
             v_recreate := TRUE;
         END LOOP;
 
@@ -4059,25 +4060,25 @@ BEGIN
     SELECT string_agg(format(E'-- %s\n%s', title, array_to_string(parts, E'\n\n')), E'\n\n' ORDER BY n)
     INTO v_script
     FROM (VALUES
-        (1, 'Solution', ARRAY[p_new->'sql'->>'solution']),
-        (2, 'Renames', v_renames),
-        (3, 'Views: drop before re-creation', v_drop_views),
-        (4, 'Foreign keys: drop changed ones', v_drop_fk),
-        (5, 'Constraints, indexes and triggers: drop changed ones', v_drop_parts),
-        (6, 'Dropped tables', v_drop_tables),
-        (7, 'Types and sequences', v_types),
-        (8, 'Tables', v_tables),
-        (9, 'Constraints', v_constraints),
-        (10, 'Functions', v_functions),
-        (11, 'Views', v_views),
-        (12, 'Foreign keys', v_fk),
-        (13, 'Indexes', v_indexes),
-        (14, 'Triggers', v_triggers),
-        (15, 'Comments', v_comments),
-        (16, 'Data', v_data),
-        (17, 'Metadata', v_meta),
-        (18, 'Dropped metadata', v_drop_meta),
-        (19, 'Dropped functions and types, translations', v_drop_last)) AS s(n, title, parts)
+        (1, 'Solution', ARRAY[p_new->'sql'->>'solution']),  -- no i18n
+        (2, 'Renames', v_renames),  -- no i18n
+        (3, 'Views: drop before re-creation', v_drop_views),  -- no i18n
+        (4, 'Foreign keys: drop changed ones', v_drop_fk),  -- no i18n
+        (5, 'Constraints, indexes and triggers: drop changed ones', v_drop_parts),  -- no i18n
+        (6, 'Dropped tables', v_drop_tables),  -- no i18n
+        (7, 'Types and sequences', v_types),  -- no i18n
+        (8, 'Tables', v_tables),  -- no i18n
+        (9, 'Constraints', v_constraints),  -- no i18n
+        (10, 'Functions', v_functions),  -- no i18n
+        (11, 'Views', v_views),  -- no i18n
+        (12, 'Foreign keys', v_fk),  -- no i18n
+        (13, 'Indexes', v_indexes),  -- no i18n
+        (14, 'Triggers', v_triggers),  -- no i18n
+        (15, 'Comments', v_comments),  -- no i18n
+        (16, 'Data', v_data),  -- no i18n
+        (17, 'Metadata', v_meta),  -- no i18n
+        (18, 'Dropped metadata', v_drop_meta),  -- no i18n
+        (19, 'Dropped functions and types, translations', v_drop_last)) AS s(n, title, parts)  -- no i18n
     WHERE cardinality(array_remove(parts, NULL)) > 0;
 
     RETURN jsonb_build_object(
@@ -4195,8 +4196,8 @@ BEGIN
         'content', concat_ws(E'\n',
             format('-- PgERP: release %s of solution “%s” (%s) — %s', v_version, v_s.title, p_solution, v_label),
             format('-- Created %s, %s. %s', to_char(now(), 'YYYY-MM-DD HH24:MI'), COALESCE(pgerp.ui_user(), 'no user'),
-                   CASE WHEN (v_diff->>'full')::BOOLEAN THEN 'The whole solution.'
-                        ELSE format('Changes since release %s:', v_last.version) END),
+                   CASE WHEN (v_diff->>'full')::BOOLEAN THEN 'The whole solution.'  -- no i18n
+                        ELSE format('Changes since release %s:', v_last.version) END),  -- no i18n
             (SELECT string_agg('--   * ' || c, E'\n') FROM jsonb_array_elements_text(v_diff->'changes') c
              WHERE NOT (v_diff->>'full')::BOOLEAN),
             (SELECT E'-- Warning:\n' || string_agg('--   ! ' || w, E'\n') FROM jsonb_array_elements_text(v_diff->'warnings') w
@@ -5795,7 +5796,7 @@ DECLARE
 BEGIN
     SELECT * INTO v_tool FROM pgerp.mcp_tools WHERE name = p_params->>'name';
     IF NOT FOUND THEN
-        RETURN jsonb_build_object('_error', jsonb_build_object('code', -32602, 'message', format('Unknown tool: %s', p_params->>'name')));
+        RETURN jsonb_build_object('_error', jsonb_build_object('code', -32602, 'message', format('Unknown tool: %s', p_params->>'name')));  -- no i18n
     END IF;
     IF jsonb_typeof(v_args) <> 'object' THEN
         RETURN jsonb_build_object('_error', jsonb_build_object('code', -32602, 'message', 'arguments must be an object'));
@@ -5840,7 +5841,7 @@ BEGIN
                                          FROM jsonb_array_elements(v_request) e) t WHERE r IS NOT NULL);
     END IF;
     IF jsonb_typeof(v_request) <> 'object' OR v_request->>'method' IS NULL THEN
-        RETURN pgerp.mcp_error(COALESCE(v_request->'id', 'null'), -32600, 'Invalid Request')::JSON;
+        RETURN pgerp.mcp_error(COALESCE(v_request->'id', 'null'), -32600, 'Invalid Request')::JSON;  -- no i18n
     END IF;
     -- Уведомления (без id) ответа не получают
     IF NOT v_request ? 'id' THEN
@@ -5861,8 +5862,8 @@ BEGIN
             'protocolVersion', CASE WHEN v_version IN ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05') THEN v_version
                                     ELSE '2025-06-18' END,
             'capabilities', jsonb_build_object('tools', jsonb_build_object('listChanged', FALSE)),
-            'serverInfo', jsonb_build_object('name', 'pgerp', 'title', 'PgERP', 'version', '1.0'),
-            'instructions', 'PgERP is a platform where application solutions (tables, PL/pgSQL functions, forms, menus, roles, reports) '
+            'serverInfo', jsonb_build_object('name', 'pgerp', 'title', 'PgERP', 'version', '1.0'),  -- no i18n
+            'instructions', 'PgERP is a platform where application solutions (tables, PL/pgSQL functions, forms, menus, roles, reports) '  -- no i18n
                             || 'live entirely in PostgreSQL. Call platform_guide before you start: it describes the platform, '
                             || 'its rules and the development workflow. Write interface texts in English.'))::JSON;
 
@@ -5886,7 +5887,7 @@ BEGIN
         RETURN (pgerp.mcp_result(v_id, v_result - '_gateway')
                 || CASE WHEN v_result ? '_gateway' THEN jsonb_build_object('_gateway', v_result->'_gateway') ELSE '{}' END)::JSON;
     ELSE
-        RETURN pgerp.mcp_error(v_id, -32601, format('Method not found: %s', v_method))::JSON;
+        RETURN pgerp.mcp_error(v_id, -32601, format('Method not found: %s', v_method))::JSON;  -- no i18n
     END CASE;
 END;
 $$ LANGUAGE plpgsql
