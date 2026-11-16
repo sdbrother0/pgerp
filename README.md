@@ -24,7 +24,7 @@ The `ghcr.io/sdbrother0/pgerp` image is pulled from GitHub Container Registry. T
 `ERP_VERSION=0.1.0 docker compose up -d`; to update — `docker compose pull && docker compose up -d`. To build the image
 from sources (in a clone of the repository) — `docker compose up -d --build`.
 
-Open http://localhost:8080 and sign in as **admin / admin** (the password must be changed at first sign-in). The
+Open http://localhost:8099 and sign in as **admin / admin** (the password must be changed at first sign-in). The
 administrator then chooses which solutions to install: CRM and examples are included.
 
 Without Docker — PostgreSQL with an `erp` database and Java 25:

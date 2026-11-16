@@ -868,11 +868,6 @@ schema with all tables and data (`DROP SCHEMA … CASCADE`; in `public` — only
 of the package are applied, in the same transaction. It also helps when a schema is left over from an earlier installation
 (for example, after a clean start that dropped only `pgerp` and `public`). Translations and users stay.
 
-The core, CRM and examples merge the earlier history (V1–V39 — `migrations-history-V1-V39.tar.gz` in the project root,
-then V1–V15 of the folder layout). A database created by an earlier history is incompatible with the new migration
-(different versions and checksums): recreate it — the application installs the core, and the administrator chooses the
-solutions at first sign-in.
-
 **Clean start (development).** To start from scratch on a particular database — when the data does not matter and
 losing it is fine — run on that database:
 
@@ -966,8 +961,39 @@ location /erp/ {
 
 | Variant | Command | Result |
 |---|---|---|
-| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/erp-gateway-0.0.1-SNAPSHOT.jar`</nobr>, run with <nobr>`java -jar`</nobr> |
+| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/erp-gateway-<version>.jar`</nobr>, run with <nobr>`java -jar`</nobr> |
 | Docker image | <nobr>`docker build -t pgerp .`</nobr> | Image on JRE 25 (`Dockerfile`) |
+
+Tests need PostgreSQL with an `erp` database (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); without one, package with
+`-DskipTests`.
+
+**GitHub Actions** (`.github/workflows`):
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | push to `main`, pull request, manual | `./mvnw verify` on JDK 25 with a PostgreSQL 18 service container; the jar is kept as the `pgerp-jar` artifact of the run |
+| `release.yml` | push of a `v*` tag | checks that the tag matches the version in `pom.xml`, builds with tests, creates a GitHub Release with `pgerp-<version>.jar` and release notes, publishes the image `ghcr.io/sdbrother0/pgerp` with tags `<version>`, `<major>.<minor>` and `latest` |
+
+## Releasing a version
+
+The version is set in one place — `<version>` in `pom.xml` (semantic versioning `MAJOR.MINOR.PATCH`, without
+`-SNAPSHOT`). A version is released by a `v<version>` tag:
+
+1. Change `<version>` in `pom.xml`, for example to `0.2.0`, and commit to `main`:
+   `git commit -am "Release 0.2.0"`.
+2. Create an annotated tag with the same version: `git tag -a v0.2.0 -m "PgERP 0.2.0"`.
+3. Push the commit and the tag: `git push origin main v0.2.0`.
+4. Watch the build: the Actions tab on GitHub or `gh run list` / `gh run watch`. If the tag does not match `pom.xml`
+   or the tests fail, the release is not created and the image is not published.
+
+The result is the release page `https://github.com/sdbrother0/pgerp/releases/tag/v0.2.0` with the jar and the image
+`ghcr.io/sdbrother0/pgerp:0.2.0` (also `:0.2` and `:latest`). `compose.yaml` runs `latest` by default; a specific
+version — `ERP_VERSION=0.2.0 docker compose up -d`.
+
+A failed release is fixed with a new commit; the tag is then moved to it:
+`git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0`, then steps 2–3 again (if the GitHub Release was already
+created, delete it first: `gh release delete v0.2.0`). A version that has already been published is not re-released —
+release the next `PATCH` instead.
 
 ## Principles
 

@@ -24,7 +24,7 @@ docker compose up -d
 `ERP_VERSION=0.1.0 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
 из исходников (в клоне репозитория) — `docker compose up -d --build`.
 
-Откройте http://localhost:8080 и войдите как **admin / admin** (при первом входе пароль нужно сменить). Затем
+Откройте http://localhost:8099 и войдите как **admin / admin** (при первом входе пароль нужно сменить). Затем
 администратор выбирает решения для установки: в комплекте CRM и примеры.
 
 Без Docker — PostgreSQL с базой `erp` и Java 25:

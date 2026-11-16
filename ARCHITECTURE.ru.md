@@ -858,10 +858,6 @@ VALUES ('item_save', 'item_save', 'Сохранение элемента');
 выпуски пакета. Помогает и когда схема осталась от прежней установки (например, после чистого старта, удалившего
 только `pgerp` и `public`). Переводы и пользователи остаются.
 
-Ядро, CRM и примеры объединяют прежнюю историю (V1–V39 — `migrations-history-V1-V39.tar.gz` в корне проекта, затем
-V1–V15 раскладки по папкам). База, созданная прежней историей, с новой миграцией несовместима (другие версии
-и контрольные суммы): её пересоздают — приложение ставит ядро, а решения администратор выбирает при первом входе.
-
 **Чистый старт (разработка).** Чтобы начать с нуля на конкретной базе — если данные не важны и их не страшно
 потерять, — выполните в этой базе:
 
@@ -955,8 +951,38 @@ location /erp/ {
 
 | Вариант | Команда | Результат |
 |---|---|---|
-| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/erp-gateway-0.0.1-SNAPSHOT.jar`</nobr>, запуск <nobr>`java -jar`</nobr> |
+| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/erp-gateway-<версия>.jar`</nobr>, запуск <nobr>`java -jar`</nobr> |
 | Образ Docker | <nobr>`docker build -t pgerp .`</nobr> | Образ на JRE 25 (`Dockerfile`) |
+
+Тестам нужен PostgreSQL с базой `erp` (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); без него — сборка с
+`-DskipTests`.
+
+**GitHub Actions** (`.github/workflows`):
+
+| Workflow | Когда запускается | Что делает |
+|---|---|---|
+| `ci.yml` | push в `main`, pull request, вручную | `./mvnw verify` на JDK 25 с сервисным контейнером PostgreSQL 18; jar сохраняется артефактом `pgerp-jar` запуска |
+| `release.yml` | push тега `v*` | проверяет, что тег совпадает с версией в `pom.xml`, собирает с тестами, создаёт GitHub Release с `pgerp-<версия>.jar` и списком изменений, публикует образ `ghcr.io/sdbrother0/pgerp` с тегами `<версия>`, `<major>.<minor>` и `latest` |
+
+## Выпуск версии
+
+Версия задаётся в одном месте — `<version>` в `pom.xml` (семантическое версионирование `MAJOR.MINOR.PATCH`, без
+`-SNAPSHOT`). Версию выпускает тег `v<версия>`:
+
+1. Поменять `<version>` в `pom.xml`, например на `0.2.0`, и закоммитить в `main`:
+   `git commit -am "Release 0.2.0"`.
+2. Создать аннотированный тег с той же версией: `git tag -a v0.2.0 -m "PgERP 0.2.0"`.
+3. Отправить коммит и тег: `git push origin main v0.2.0`.
+4. Следить за сборкой: вкладка Actions на GitHub или `gh run list` / `gh run watch`. Если тег не совпадает с `pom.xml`
+   или тесты упали, релиз не создаётся и образ не публикуется.
+
+Результат — страница релиза `https://github.com/sdbrother0/pgerp/releases/tag/v0.2.0` с jar и образ
+`ghcr.io/sdbrother0/pgerp:0.2.0` (а также `:0.2` и `:latest`). `compose.yaml` по умолчанию запускает `latest`,
+конкретную версию — `ERP_VERSION=0.2.0 docker compose up -d`.
+
+Неудачный выпуск исправляют новым коммитом, а тег переносят на него: `git tag -d v0.2.0 && git push origin
+:refs/tags/v0.2.0`, затем снова шаги 2–3 (если GitHub Release уже создан, сначала удалить его: `gh release delete v0.2.0`).
+Уже опубликованную версию не перевыпускают — выпускают следующую `PATCH`.
 
 ## Принципы
 
