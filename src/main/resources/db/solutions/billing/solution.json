@@ -1,0 +1,9 @@
+{
+  "name": "billing",
+  "title": {"ru": "Счета на оплату", "en": "Billing"},
+  "description": {
+    "ru": "Счета на товары и услуги: справочники, счёт со строками (master-detail), итоги с НДС, статусы, роль бухгалтера.",
+    "en": "Invoices for goods and services: catalogue, an invoice with lines (master-detail), totals with VAT, statuses, an accountant role."
+  },
+  "schema": "billing"
+}

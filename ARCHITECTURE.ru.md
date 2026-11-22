@@ -86,7 +86,7 @@ Java не разбирает JSON и не знает предметной обл
 | Клиент | <nobr>`src/main/resources/static/js/ui-runtime.js`</nobr>, <nobr>`js/menu-editor.js`</nobr>, <nobr>`js/i18n.js`</nobr>, <nobr>`js/theme.js`</nobr>, <nobr>`index.html`</nobr>, <nobr>`editor.html`</nobr>, <nobr>`login.html`</nobr>, <nobr>`css/app.css`</nobr> |
 | Разработка решений в редакторе | <nobr>`js/solution-editor.js`</nobr> (решения и выпуски), <nobr>`js/schema-editor.js`</nobr> (схема данных), <nobr>`js/sql-console.js`</nobr> (SQL-консоль), <nobr>`js/mcp-access.js`</nobr> (доступ MCP), <nobr>`js/solution-packages.js`</nobr> (установка решений), <nobr>`js/editor-kit.js`</nobr> (общие элементы); <nobr>`src/main/java/org/sdbrother/pgerp/dev/`</nobr> — <nobr>`DevController`</nobr> (выпуск с сохранением файла, установка пакетов), <nobr>`SolutionPackages`</nobr>, <nobr>`SolutionUpgradeRunner`</nobr>, <nobr>`MigrationWriter`</nobr>, <nobr>`DevProperties`</nobr> |
 | MCP-сервер | <nobr>`src/main/java/org/sdbrother/pgerp/mcp/`</nobr> — <nobr>`McpController`</nobr> (<nobr>`POST /mcp`</nobr>), <nobr>`McpSecurityConfig`</nobr> и <nobr>`McpTokenFilter`</nobr> (вход по токену), <nobr>`McpGateway`</nobr>, <nobr>`McpProperties`</nobr> |
-| Схема, функции и метаданные | <nobr>`src/main/resources/db/migration/V1__core.sql`</nobr> — ядро; <nobr>`db/solutions/crm/`</nobr>, <nobr>`db/solutions/examples/`</nobr> — пакеты решений |
+| Схема, функции и метаданные | <nobr>`src/main/resources/db/migration/V1__core.sql`</nobr> — ядро; <nobr>`db/solutions/crm/`</nobr>, <nobr>`db/solutions/billing/`</nobr>, <nobr>`db/solutions/examples/`</nobr> — пакеты решений |
 | Настройки | <nobr>`src/main/resources/application.properties`</nobr> — <nobr>`erp.dispatcher.function-name`</nobr>, <nobr>`erp.push.channel`</nobr>, <nobr>`spring.flyway.init-sqls`</nobr>, <nobr>`erp.dev.solutions-dir`</nobr>, <nobr>`erp.dev.auto-update`</nobr>, <nobr>`erp.mcp.allowed-origins`</nobr> |
 
 ## Путь одного события
@@ -363,7 +363,7 @@ flowchart LR
 не решение, см. «Ядро и решения» ниже. Таблицы-справочники,
 строки которых нужны на любой установке (стадии, типы), отмечаются в `pgerp.solution_data`.
 
-Миграция ядра решений не создаёт. CRM и примеры — **пакеты решений** (см. «Миграции и пакеты решений»):
+Миграция ядра решений не создаёт. CRM, счета на оплату и примеры — **пакеты решений** (см. «Миграции и пакеты решений»):
 установка пакета создаёт решение, его схему и объекты и записывает его выпуски. Новое решение из редактора получает
 схему при создании (по умолчанию — имя решения).
 
@@ -862,6 +862,7 @@ VALUES ('item_save', 'item_save', 'Сохранение элемента');
 | Пакет | Схема по умолчанию | Состав |
 |---|---|---|
 | <nobr>`crm`</nobr> | <nobr>`crm`</nobr> | Компании и контакты, сделки по воронке с товарами, задачи и напоминания, журнал сделки, закрытие сделки без сохранения (снимок сделки), роли <nobr>`crm_manager`</nobr> / <nobr>`crm_head`</nobr> с видимостью своих и всех сделок, уведомления <nobr>`ui_push_to_user`</nobr> / <nobr>`ui_push_to_role`</nobr>, отчёты PDF «Коммерческое предложение» и «Воронка продаж», цвета стадий — в справочнике стадий (<nobr>`crm_stages.tone`</nobr>, выпуск 2). Демо-данные; демо-пользователи ivanov, petrova, sidorov — без пароля, его задаёт администратор |
+| <nobr>`billing`</nobr> | <nobr>`billing`</nobr> | Счета на товары и услуги: справочники товаров, услуг и покупателей, счёт со строками (master-detail: таблица строк с мастером, форма строки с выбором товара, который подставляет цену и НДС, итог карточки обновляется из формы строки), состояния черновик / выставлен / оплачен / аннулирован и просрочка по сроку оплаты, роль <nobr>`bill_accountant`</nobr>, русские переводы. Готовое решение [руководства по счетам](docs/tutorial-invoices.ru.md) под другими именами (<nobr>`bill_`</nobr> вместо <nobr>`inv_`</nobr>) |
 | <nobr>`examples`</nobr> | <nobr>`examples`</nobr> | Hello World, деление с проверкой ввода, игра «Падающие блоки», чат во всех вкладках |
 | ваши решения | имя решения | Выпуски из редактора или MCP (см. «Разработка решений») |
 

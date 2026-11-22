@@ -89,7 +89,7 @@ means rows in the metadata and a PL/pgSQL function registered in `pgerp.ui_actio
 | Client | <nobr>`src/main/resources/static/js/ui-runtime.js`</nobr>, <nobr>`js/menu-editor.js`</nobr>, <nobr>`js/i18n.js`</nobr>, <nobr>`js/theme.js`</nobr>, <nobr>`index.html`</nobr>, <nobr>`editor.html`</nobr>, <nobr>`login.html`</nobr>, <nobr>`css/app.css`</nobr> |
 | Solution development in the editor | <nobr>`js/solution-editor.js`</nobr> (solutions and releases), <nobr>`js/schema-editor.js`</nobr> (data schema), <nobr>`js/sql-console.js`</nobr> (SQL console), <nobr>`js/mcp-access.js`</nobr> (MCP access), <nobr>`js/solution-packages.js`</nobr> (installing solutions), <nobr>`js/editor-kit.js`</nobr> (shared elements); <nobr>`src/main/java/org/sdbrother/pgerp/dev/`</nobr> — <nobr>`DevController`</nobr> (release with file saving, package installation), <nobr>`SolutionPackages`</nobr>, <nobr>`SolutionUpgradeRunner`</nobr>, <nobr>`MigrationWriter`</nobr>, <nobr>`DevProperties`</nobr> |
 | MCP server | <nobr>`src/main/java/org/sdbrother/pgerp/mcp/`</nobr> — <nobr>`McpController`</nobr> (<nobr>`POST /mcp`</nobr>), <nobr>`McpSecurityConfig`</nobr> and <nobr>`McpTokenFilter`</nobr> (token sign-in), <nobr>`McpGateway`</nobr>, <nobr>`McpProperties`</nobr> |
-| Schema, functions and metadata | <nobr>`src/main/resources/db/migration/V1__core.sql`</nobr> — the core; <nobr>`db/solutions/crm/`</nobr>, <nobr>`db/solutions/examples/`</nobr> — solution packages |
+| Schema, functions and metadata | <nobr>`src/main/resources/db/migration/V1__core.sql`</nobr> — the core; <nobr>`db/solutions/crm/`</nobr>, <nobr>`db/solutions/billing/`</nobr>, <nobr>`db/solutions/examples/`</nobr> — solution packages |
 | Settings | <nobr>`src/main/resources/application.properties`</nobr> — <nobr>`erp.dispatcher.function-name`</nobr>, <nobr>`erp.push.channel`</nobr>, <nobr>`spring.flyway.init-sqls`</nobr>, <nobr>`erp.dev.solutions-dir`</nobr>, <nobr>`erp.dev.auto-update`</nobr>, <nobr>`erp.mcp.allowed-origins`</nobr> |
 
 ## The path of one event
@@ -370,7 +370,7 @@ a solution if its name starts with the prefix (the longest one wins) or if it wa
 "The core and solutions" below. Reference tables whose rows are needed on every
 installation (stages, types) are marked in `pgerp.solution_data`.
 
-The core migration creates no solutions. CRM and the examples are **solution packages**
+The core migration creates no solutions. CRM, billing and the examples are **solution packages**
 (see "Migrations and solution packages"): installing a package creates the solution, its schema and objects and records
 its releases. A new solution made in the editor gets its schema at creation (by default — the solution name).
 
@@ -870,6 +870,7 @@ CRM or the examples — everything a solution needs is in its package.
 | Package | Default schema | Contents |
 |---|---|---|
 | <nobr>`crm`</nobr> | <nobr>`crm`</nobr> | Companies and contacts, deals through a pipeline with products, tasks and reminders, the deal log, closing a deal without saving (a snapshot of the deal), roles <nobr>`crm_manager`</nobr> / <nobr>`crm_head`</nobr> seeing their own and all deals, notifications <nobr>`ui_push_to_user`</nobr> / <nobr>`ui_push_to_role`</nobr>, PDF reports "Commercial offer" and "Sales pipeline", stage colours in the stage reference table (<nobr>`crm_stages.tone`</nobr>, release 2). Demo data; demo users ivanov, petrova, sidorov — without a password, the administrator sets it |
+| <nobr>`billing`</nobr> | <nobr>`billing`</nobr> | Invoices for goods and services: a catalogue of goods, services and customers, an invoice with lines (master-detail: a lines table with a master, a line form with an item lookup that fills price and VAT, the card total updated from the line form), statuses draft / issued / paid / cancelled with overdue by the payment date, the role <nobr>`bill_accountant`</nobr>, Russian translations. The finished solution of [the invoices tutorial](docs/tutorial-invoices.md) under other names (<nobr>`bill_`</nobr> instead of <nobr>`inv_`</nobr>) |
 | <nobr>`examples`</nobr> | <nobr>`examples`</nobr> | Hello World, division with input checks, the "Falling blocks" game, a chat across all tabs |
 | your solutions | the solution name | Releases from the editor or MCP (see "Solution development") |
 

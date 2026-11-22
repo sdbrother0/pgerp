@@ -7,6 +7,10 @@ totals with VAT, statuses and permissions. The main topic is **master-detail**: 
 table of its lines (the details), which are edited in a separate form and update the card total right away. The solution
 depends on nothing: neither CRM nor the examples are needed.
 
+> The finished result ships with the application — the **Billing** package (<nobr>`billing`</nobr>, prefix
+> <nobr>`bill_`</nobr>, role <nobr>`bill_accountant`</nobr>): "Solutions → Install solutions". Its names differ so that the package and the
+> solution built with this guide (<nobr>`invoices`</nobr>, <nobr>`inv_`</nobr>) do not get in each other's way and can be compared.
+
 The basics — table, card, list, row buttons, menu, role, release — are covered in detail in the
 [to-do list](tutorial-todo.md); here they are brief, and what a document with lines needs is explained in more depth.
 
@@ -64,16 +68,18 @@ A ready-made request for the agent is [at the end](#the-same-with-an-ai-agent-mc
 ## How master-detail works
 
 ```
-Invoice card inv_invoice (master)                   Invoice line inv_line (details)
-┌──────────────────────────────────────┐            ┌──────────────────────────┐
-│ id (hidden) ──────────┐              │            │ invoice_id (hidden)      │
-│ Number, date, customer │             │   opens     │ Goods or service [...]   │
-│ [Add line] ────────────┼─────────────┼──────────► │ Quantity, price, VAT     │
-│ ┌ inv_lines_grid ──────▼─────┐       │            │ [Save]                   │
-│ │ Master: id → master_id     │ ◄─────┼────────────┤  refresh_grid +          │
-│ └────────────────────────────┘       │            │  set_values(total,       │
-│ Total: … ◄───────────────────────────┼────────────┤    p_form => 'inv_invoice')
-└──────────────────────────────────────┘            └──────────────────────────┘
+ Invoice card inv_invoice (master)          Invoice line inv_line (details)
+┌────────────────────────────────────┐     ┌────────────────────────────────┐
+│ id (hidden)                        │     │ invoice_id (hidden)            │
+│ Number, date, customer             │     │ Goods or service [...]         │
+│                                    │     │ Quantity, price, VAT           │
+│ [Add line]                         │---->│                                │
+│                                    │     │ [Save]                         │
+│ Table inv_lines_grid,              │<----│ ui_refresh_grid                │
+│   Master = id -> master_id         │     │                                │
+│ Total: ...                         │<----│ ui_set_values(..., p_form =>   │
+│                                    │     │   'inv_invoice')               │
+└────────────────────────────────────┘     └────────────────────────────────┘
 ```
 
 - **Details table.** The lines table in the card has the **"Master"** property = <nobr>`id`</nobr> — the name of a card field.
