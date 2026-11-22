@@ -47,7 +47,7 @@ CRM и примеры для него не нужны.
 3. Подключите Claude Code. Адрес возьмите из «Адрес сервера» вашей установки:
 
    ```bash
-   claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <токен>"
+   claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <токен>"
    ```
 
 4. Проверьте: в Claude Code команда `/mcp` показывает сервер `pgerp` подключённым, а запрос «вызови platform_guide»

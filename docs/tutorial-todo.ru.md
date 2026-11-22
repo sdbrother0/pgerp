@@ -391,8 +391,10 @@ UPDATE pgerp.grid_columns SET sort_column = 'due_on' WHERE action_name = 'todo_t
 (пользователь — администратор, начальный пароль должен быть сменён), затем в Claude Code:
 
 ```bash
-claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <токен>"
+claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <токен>"
 ```
+
+Порт 8099 — как в установке из [README](../README.ru.md); точный адрес вашей установки — на странице «Доступ MCP», в «Адресе сервера».
 
 и попросите словами, например:
 

@@ -47,7 +47,7 @@ an agent over MCP. If you build by hand, skip this step.
 3. Connect Claude Code. Take the address from "Server address" of your installation:
 
    ```bash
-   claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <token>"
+   claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <token>"
    ```
 
 4. Check: in Claude Code the `/mcp` command shows the `pgerp` server as connected, and the request "call

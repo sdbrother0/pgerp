@@ -383,8 +383,10 @@ Code is explained step by step in [the invoices guide, step 0](tutorial-invoices
 **MCP access → "Issue token"** (the user is an administrator whose initial password has been changed), then in Claude Code:
 
 ```bash
-claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <token>"
 ```
+
+Port 8099 is the one from the [README](../README.md) installation; the exact address of your installation is on the "MCP access" page, under "Server address".
 
 and ask in plain words, for example:
 
