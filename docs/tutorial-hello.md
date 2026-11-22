@@ -131,5 +131,6 @@ Switch the language in the header: the form and the message are now in Russian �
 ## Next
 
 - [A to-do list from scratch](tutorial-todo.md) — a table, a list with search, row buttons, permissions and a release
+- [Invoices for goods and services](tutorial-invoices.md) — a document with lines (master-detail), selection windows, totals, statuses, translations, MCP
   of the solution package.
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — all <nobr>`ui_*`</nobr> functions and how the platform works.

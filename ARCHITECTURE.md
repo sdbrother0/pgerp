@@ -345,7 +345,7 @@ from the form editor, live in the database: a solution release carries them to n
 
 ## Solution development
 
-Step-by-step examples: [Hello World](docs/tutorial-hello.md) — a form, a button and a message; [a "To-do list" application from scratch](docs/tutorial-todo.md) — with screenshots.
+Step-by-step examples: [Hello World](docs/tutorial-hello.md) — a form, a button and a message; [a "To-do list" application from scratch](docs/tutorial-todo.md) — with screenshots; [invoices with lines](docs/tutorial-invoices.md) — a master-detail document, built over MCP.
 
 The full development cycle of an application solution happens in the editor (`editor.html`) or by an AI agent through the MCP server:
 data model → action functions → forms, table columns, menu, roles, translations, reports → testing → release
