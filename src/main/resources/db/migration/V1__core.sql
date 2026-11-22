@@ -3473,7 +3473,8 @@ BEGIN
 
     -- Последовательности
     FOR v_name, v_n IN SELECT key, value FROM jsonb_each(p_new->'sequences') ORDER BY key LOOP
-        IF NOT v_old->'sequences' ? v_name THEN
+        -- Без прошлого снимка (первый выпуск, «Полный скрипт») v_old->'sequences' — NULL: последовательность новая
+        IF NOT COALESCE(v_old->'sequences' ? v_name, FALSE) THEN
             v_types := v_types || (v_n->>'def');
             v_changes := v_changes || format('New sequence %s', v_name);
         END IF;
