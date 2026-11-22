@@ -25,6 +25,8 @@ docker compose up -d
 `ERP_VERSION=0.4.0 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
 из исходников (в клоне репозитория) — `docker compose up -d --build`.
 
+Версии, описание изменений и jar: [GitHub Releases](https://github.com/sdbrother0/pgerp/releases).
+
 Откройте http://localhost:8099 и войдите как **admin / admin** (при первом входе пароль нужно сменить). Затем
 администратор выбирает решения для установки: в комплекте CRM и примеры.
 
