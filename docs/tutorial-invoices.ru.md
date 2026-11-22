@@ -1091,6 +1091,23 @@ ON CONFLICT (lang, source) DO NOTHING;
 > цену и НДС. Менять можно только черновик. Роль inv_accountant, меню, русские переводы. Проверь действия через
 > action_run от имени пользователя с ролью и покажи release_preview.
 
+Шаги руководства и инструменты, которыми их выполнит агент:
+
+| Шаг | Инструмент MCP |
+|---|---|
+| 1. Решение | <nobr>`solution_save`</nobr> |
+| 2. Таблицы | <nobr>`table_save`</nobr>: сначала <nobr>`apply: false`</nobr> — показать SQL, затем <nobr>`apply: true`</nobr> |
+| 3. Представления | <nobr>`view_save`</nobr> |
+| 4, 6, 7. Код | <nobr>`sql_run`</nobr> — те же скрипты, или <nobr>`function_save`</nobr> — по одному действию |
+| 5–8. Формы | <nobr>`form_save`</nobr> — форма целиком; свойство таблицы-деталей — <nobr>`"master": "id"`</nobr> |
+| 9. Колонки | <nobr>`grid_columns_save`</nobr> |
+| 10. Кнопки в строках | <nobr>`sql_run`</nobr> |
+| 11. Меню | <nobr>`menu_get`</nobr>, затем <nobr>`menu_save`</nobr> — меню **целиком** с новой папкой |
+| 12. Права | <nobr>`role_set`</nobr> |
+| 13. Переводы | <nobr>`translation_save`</nobr> или скрипт через <nobr>`sql_run`</nobr>; проверка — <nobr>`translation_list`</nobr> с <nobr>`missing: true`</nobr> |
+| 14–15. Проверка | <nobr>`action_run`</nobr> с <nobr>`user`</nobr> — от имени бухгалтера, с откатом |
+| 16. Выпуск | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — когда вы попросите |
+
 Агент начнёт с <nobr>`platform_guide`</nobr> и пройдёт те же шаги инструментами <nobr>`solution_save`</nobr>, <nobr>`table_save`</nobr>,
 <nobr>`view_save`</nobr>, <nobr>`sql_run`</nobr>, <nobr>`function_save`</nobr>, <nobr>`form_save`</nobr>, <nobr>`grid_columns_save`</nobr>, <nobr>`menu_save`</nobr>,
 <nobr>`role_set`</nobr>, <nobr>`translation_save`</nobr>, <nobr>`action_run`</nobr>, <nobr>`release_preview`</nobr>. Результат открывается в том же редакторе;

@@ -20,6 +20,7 @@
 | 5 | Меню | пункт меню |
 | 6 | Приложение | проверка |
 | 7 | Переводы | «Hello, %s» на другом языке |
+| — | Доступ MCP | [то же силами ИИ-агента](#то-же--через-mcp) |
 
 ## Как это работает
 
@@ -148,6 +149,51 @@ END;
 пример использует те же тексты.
 
 ![Приветствие на русском](img/hello/ru/09-app-translated.png)
+
+## То же — через MCP
+
+Всё это может сделать ИИ-агент через MCP-сервер приложения. Как выдать токен и подключить Claude Code — по шагам
+в [руководстве по счетам, шаг 0](tutorial-invoices.ru.md#0-подключение-mcp); коротко: **Доступ MCP → «Выдать токен»**
+(пользователь — администратор, начальный пароль должен быть сменён), затем
+
+```bash
+claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <токен>"
+```
+
+и попросите, например:
+
+> Создай в PgERP решение greet «Greeting» (префикс greet_, папка меню Greeting): форма greet_hello «Hello World»
+> с полем user_name «Your name» и кнопкой «Say hello», которая показывает «Hello, <имя>», а без имени — ошибку
+> «Enter a name»; пункт меню Greeting → Hello World; русские переводы. Проверь действие через action_run.
+
+Шаги руководства и инструменты, которыми их выполнит агент:
+
+| Шаг | Инструмент MCP |
+|---|---|
+| 2. Решение | <nobr>`solution_save`</nobr> |
+| 3. Форма | <nobr>`form_save`</nobr> — форма целиком, со всеми компонентами |
+| 4. Код кнопки | <nobr>`function_save`</nobr> — функция и действие; до формы, потому что форма ссылается на действие |
+| 5. Меню | <nobr>`menu_get`</nobr>, затем <nobr>`menu_save`</nobr> — меню **целиком** с новым пунктом |
+| 6. Проверка | <nobr>`action_run`</nobr> — как кнопка формы, с откатом |
+| 7. Перевод | <nobr>`translation_save`</nobr> — по одному тексту |
+
+Так выглядят вызовы (имя инструмента и аргументы; этот пример ими собран и проверен):
+
+```
+solution_save {"name": "greet", "title": "Greeting", "is_new": true, "prefix": "greet_", "menu_folder": "Greeting"}
+function_save {"name": "greet_hello_run", "description": "Greeting by name", "is_new": true, "body": "DECLARE\n    v_name VARCHAR := ui_text(p_data, 'user_name');\nBEGIN\n    PERFORM ui_require(v_name IS NOT NULL, ui_t('Enter a name'));\n    RETURN ui_ok(ui_message(format(ui_t('Hello, %s'), v_name)));\nEND;"}
+form_save {"name": "greet_hello", "title": "Hello World", "folder": "Greeting", "components": [{"type": "input", "name": "user_name", "label": "Your name"}, {"type": "button", "name": "btn_run", "label": "Say hello", "action": "greet_hello_run"}]}
+menu_get {}
+menu_save {"items": [ …пункты из menu_get…, {"title": "Greeting", "items": [{"title": "Hello World", "form": "greet_hello"}]}]}
+translation_save {"lang": "ru", "source": "Your name", "translation": "Имя"}
+translation_save {"lang": "ru", "source": "Say hello", "translation": "Поздороваться"}
+translation_save {"lang": "ru", "source": "Enter a name", "translation": "Введите имя"}
+translation_save {"lang": "ru", "source": "Hello, %s", "translation": "Привет, %s"}
+action_run {"action": "greet_hello_run", "data": {"user_name": "Anna"}}
+```
+
+Ответ <nobr>`action_run`</nobr> — инструкция <nobr>`show_message`</nobr> «Hello, Anna»; для пользователя с русским языком — «Привет, Anna».
+Агент начинает с <nobr>`platform_guide`</nobr>: там правила платформы и формат форм. Результат открывается в том же редакторе.
 
 ## Дальше
 

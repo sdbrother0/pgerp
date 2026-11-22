@@ -22,6 +22,7 @@ confirmation; overdue tasks are highlighted.
 | 8–9 | Menu, Roles | a menu item and the role <nobr>`todo_user`</nobr> |
 | 10–11 | Application, console | testing |
 | 12 | Solutions | release — a file of the solution package |
+| — | MCP access | [the same with an AI agent](#the-same-with-an-ai-agent-mcp) |
 
 ## How it works (in short)
 
@@ -374,8 +375,9 @@ If a table's rows are needed on every installation (reference data), tick "Data"
 
 ## The same with an AI agent (MCP)
 
-Everything above is available to an agent through the application's MCP server. **MCP access → "Issue token"**, then in
-Claude Code:
+Everything above is available to an agent through the application's MCP server. How to issue a token and connect Claude
+Code is explained step by step in [the invoices guide, step 0](tutorial-invoices.md#0-connecting-mcp); in short:
+**MCP access → "Issue token"** (the user is an administrator whose initial password has been changed), then in Claude Code:
 
 ```bash
 claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <token>"
@@ -391,3 +393,16 @@ and ask in plain words, for example:
 The agent reads the platform guide (<nobr>`platform_guide`</nobr>) and performs the same steps with the tools
 <nobr>`solution_save`</nobr>, <nobr>`table_save`</nobr>, <nobr>`view_save`</nobr>, <nobr>`function_save`</nobr>, <nobr>`form_save`</nobr>, <nobr>`grid_columns_save`</nobr>, <nobr>`sql_run`</nobr>,
 <nobr>`menu_save`</nobr>, <nobr>`role_set`</nobr>, <nobr>`action_run`</nobr>, <nobr>`release_preview`</nobr>. The result opens in the same editor.
+
+| Step | MCP tool |
+|---|---|
+| 2. Solution | <nobr>`solution_save`</nobr> |
+| 3. Table | <nobr>`table_save`</nobr>: first <nobr>`apply: false`</nobr> — show the SQL, then <nobr>`apply: true`</nobr> |
+| 4. View | <nobr>`view_save`</nobr> |
+| 5–6. Button functions and the table source | <nobr>`function_save`</nobr> |
+| 5–6. Card and list | <nobr>`form_save`</nobr>; table columns — <nobr>`grid_columns_save`</nobr> |
+| 7. Row buttons | <nobr>`sql_run`</nobr> — the same script as in the console |
+| 8. Menu | <nobr>`menu_get`</nobr>, then <nobr>`menu_save`</nobr> — the **whole** menu with the new items |
+| 9. Permissions | <nobr>`role_set`</nobr> |
+| 11. Testing | <nobr>`action_run`</nobr> with <nobr>`user`</nobr> — on behalf of a user with the role, rolled back |
+| 12. Release | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — when you ask for it |

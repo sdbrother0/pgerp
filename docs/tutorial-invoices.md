@@ -1091,6 +1091,23 @@ Connect the agent (step 0) and ask, for example:
 > price and VAT. Only a draft can be changed. Role inv_accountant, a menu, Russian translations. Test the actions with
 > action_run on behalf of a user with the role and show release_preview.
 
+The guide's steps and the tools the agent uses for them:
+
+| Step | MCP tool |
+|---|---|
+| 1. Solution | <nobr>`solution_save`</nobr> |
+| 2. Tables | <nobr>`table_save`</nobr>: first <nobr>`apply: false`</nobr> — show the SQL, then <nobr>`apply: true`</nobr> |
+| 3. Views | <nobr>`view_save`</nobr> |
+| 4, 6, 7. Code | <nobr>`sql_run`</nobr> — the same scripts, or <nobr>`function_save`</nobr> — one action at a time |
+| 5–8. Forms | <nobr>`form_save`</nobr> — the whole form; the details table property — <nobr>`"master": "id"`</nobr> |
+| 9. Columns | <nobr>`grid_columns_save`</nobr> |
+| 10. Row buttons | <nobr>`sql_run`</nobr> |
+| 11. Menu | <nobr>`menu_get`</nobr>, then <nobr>`menu_save`</nobr> — the **whole** menu with the new folder |
+| 12. Permissions | <nobr>`role_set`</nobr> |
+| 13. Translations | <nobr>`translation_save`</nobr> or a script via <nobr>`sql_run`</nobr>; check — <nobr>`translation_list`</nobr> with <nobr>`missing: true`</nobr> |
+| 14–15. Testing | <nobr>`action_run`</nobr> with <nobr>`user`</nobr> — on behalf of the accountant, rolled back |
+| 16. Release | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — when you ask for it |
+
 The agent starts with <nobr>`platform_guide`</nobr> and goes through the same steps with the tools <nobr>`solution_save`</nobr>, <nobr>`table_save`</nobr>,
 <nobr>`view_save`</nobr>, <nobr>`sql_run`</nobr>, <nobr>`function_save`</nobr>, <nobr>`form_save`</nobr>, <nobr>`grid_columns_save`</nobr>, <nobr>`menu_save`</nobr>,
 <nobr>`role_set`</nobr>, <nobr>`translation_save`</nobr>, <nobr>`action_run`</nobr>, <nobr>`release_preview`</nobr>. The result opens in the same editor; the agent

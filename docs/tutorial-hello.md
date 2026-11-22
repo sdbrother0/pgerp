@@ -20,6 +20,7 @@ a list and permissions: [a to-do list from scratch](tutorial-todo.md).
 | 5 | Menu | a menu item |
 | 6 | Application | testing |
 | 7 | Translations | "Hello, %s" in another language |
+| — | MCP access | [the same with an AI agent](#the-same-over-mcp) |
 
 ## How it works
 
@@ -147,6 +148,52 @@ Switch the language in the header: the form and the message are now in Russian �
 "Hello, %s" are already translated — the built-in example uses the same texts.
 
 ![The greeting in Russian](img/hello/en/09-app-translated.png)
+
+## The same over MCP
+
+An AI agent can do all of this through the application's MCP server. How to issue a token and connect Claude Code is
+explained step by step in [the invoices guide, step 0](tutorial-invoices.md#0-connecting-mcp); in short:
+**MCP access → "Issue token"** (the user is an administrator whose initial password has been changed), then
+
+```bash
+claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <token>"
+```
+
+and ask, for example:
+
+> Create a PgERP solution greet "Greeting" (prefix greet_, menu folder Greeting): a form greet_hello "Hello World"
+> with a user_name field "Your name" and a "Say hello" button that shows "Hello, <name>", and the error "Enter a name"
+> without a name; a menu item Greeting → Hello World; Russian translations. Test the action with action_run.
+
+The guide's steps and the tools the agent uses for them:
+
+| Step | MCP tool |
+|---|---|
+| 2. Solution | <nobr>`solution_save`</nobr> |
+| 3. Form | <nobr>`form_save`</nobr> — the whole form with all components |
+| 4. Button code | <nobr>`function_save`</nobr> — the function and the action; before the form, because the form refers to the action |
+| 5. Menu | <nobr>`menu_get`</nobr>, then <nobr>`menu_save`</nobr> — the **whole** menu with the new item |
+| 6. Testing | <nobr>`action_run`</nobr> — like the form button, rolled back |
+| 7. Translation | <nobr>`translation_save`</nobr> — one text at a time |
+
+The calls look like this (tool name and arguments; this example was built and tested with them):
+
+```
+solution_save {"name": "greet", "title": "Greeting", "is_new": true, "prefix": "greet_", "menu_folder": "Greeting"}
+function_save {"name": "greet_hello_run", "description": "Greeting by name", "is_new": true, "body": "DECLARE\n    v_name VARCHAR := ui_text(p_data, 'user_name');\nBEGIN\n    PERFORM ui_require(v_name IS NOT NULL, ui_t('Enter a name'));\n    RETURN ui_ok(ui_message(format(ui_t('Hello, %s'), v_name)));\nEND;"}
+form_save {"name": "greet_hello", "title": "Hello World", "folder": "Greeting", "components": [{"type": "input", "name": "user_name", "label": "Your name"}, {"type": "button", "name": "btn_run", "label": "Say hello", "action": "greet_hello_run"}]}
+menu_get {}
+menu_save {"items": [ …items from menu_get…, {"title": "Greeting", "items": [{"title": "Hello World", "form": "greet_hello"}]}]}
+translation_save {"lang": "ru", "source": "Your name", "translation": "Имя"}
+translation_save {"lang": "ru", "source": "Say hello", "translation": "Поздороваться"}
+translation_save {"lang": "ru", "source": "Enter a name", "translation": "Введите имя"}
+translation_save {"lang": "ru", "source": "Hello, %s", "translation": "Привет, %s"}
+action_run {"action": "greet_hello_run", "data": {"user_name": "Anna"}}
+```
+
+The <nobr>`action_run`</nobr> response is a <nobr>`show_message`</nobr> instruction "Hello, Anna"; for a user with the Russian language —
+"Привет, Anna". The agent starts with <nobr>`platform_guide`</nobr>: it holds the platform rules and the form format. The result opens
+in the same editor.
 
 ## Next
 
