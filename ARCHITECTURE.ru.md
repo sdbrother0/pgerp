@@ -964,7 +964,7 @@ location /erp/ {
 | Workflow | Когда запускается | Что делает |
 |---|---|---|
 | `ci.yml` | push в `main`, pull request, вручную | `./mvnw verify` на JDK 25 с сервисным контейнером PostgreSQL 18; jar сохраняется артефактом `pgerp-jar` запуска |
-| `release.yml` | push тега `v*` | проверяет, что тег совпадает с версией в `pom.xml`, собирает с тестами, создаёт GitHub Release с `pgerp-<версия>.jar` и списком изменений, публикует образ `ghcr.io/sdbrother0/pgerp` с тегами `<версия>`, `<major>.<minor>` и `latest` |
+| `release.yml` | push тега `v*` | проверяет, что тег совпадает с версией в `pom.xml`, собирает с тестами, создаёт GitHub Release с `pgerp-<версия>.jar` и списком изменений, публикует образ `ghcr.io/sdbrother0/pgerp` для `linux/amd64` и `linux/arm64` с тегами `<версия>`, `<major>.<minor>` и `latest` |
 
 ## Выпуск версии
 

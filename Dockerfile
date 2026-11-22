@@ -4,7 +4,8 @@
 # Запуск вместе с PostgreSQL — compose.yaml (docker compose up -d).
 
 # ---------- Сборка ----------
-FROM eclipse-temurin:25-jdk AS build
+# Jar не зависит от архитектуры: сборка всегда на платформе сборщика, без эмуляции
+FROM --platform=$BUILDPLATFORM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 
 # Сначала только описание сборки: зависимости кэшируются, пока не изменился pom.xml

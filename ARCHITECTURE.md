@@ -974,7 +974,7 @@ Tests need PostgreSQL with an `erp` database (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | push to `main`, pull request, manual | `./mvnw verify` on JDK 25 with a PostgreSQL 18 service container; the jar is kept as the `pgerp-jar` artifact of the run |
-| `release.yml` | push of a `v*` tag | checks that the tag matches the version in `pom.xml`, builds with tests, creates a GitHub Release with `pgerp-<version>.jar` and release notes, publishes the image `ghcr.io/sdbrother0/pgerp` with tags `<version>`, `<major>.<minor>` and `latest` |
+| `release.yml` | push of a `v*` tag | checks that the tag matches the version in `pom.xml`, builds with tests, creates a GitHub Release with `pgerp-<version>.jar` and release notes, publishes the `linux/amd64` and `linux/arm64` image `ghcr.io/sdbrother0/pgerp` with tags `<version>`, `<major>.<minor>` and `latest` |
 
 ## Releasing a version
 
