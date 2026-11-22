@@ -18,6 +18,7 @@ const MESSAGES = {
 		'Invalid login or password': 'Неверный логин или пароль',
 		'The page is out of date — reload it and sign in again': 'Страница устарела — обновите её и войдите снова',
 		'Sign-in error (HTTP {0})': 'Ошибка входа (HTTP {0})',
+		'Error': 'Ошибка',
 		'The server is unavailable': 'Сервер недоступен',
 		'PgERP — home': 'PgERP — на главную',
 		'PgERP version {0}': 'Версия PgERP {0}',
@@ -157,8 +158,8 @@ const MESSAGES = {
 		'PL/pgSQL code': 'Код PL/pgSQL',
 		'Function code: open or create a template': 'Код функции: открыть или создать заготовку',
 		'New action function': 'Новая функция действия',
-		'Template: the function is created in the public schema and becomes the component action.':
-			'Заготовка: функция создаётся в схеме public и становится действием компонента.',
+		'Template: the function is created in the schema of its solution (by the name prefix; without a solution — public) and becomes the component action.':
+			'Заготовка: функция создаётся в схеме своего решения (по префиксу имени; без решения — в public) и становится действием компонента.',
 		'Function and action name': 'Имя функции и действия',
 		'Description': 'Описание',
 		'Volatility': 'Изменчивость',

@@ -470,9 +470,8 @@ dialog.message p {
 	font-size: 13px;
 }
 
-/* Ошибка: красный заголовок над текстом */
-dialog.message-error::before {
-	content: 'Error';
+/* Ошибка: красный заголовок над текстом (текст — из showMessage, переведён) */
+dialog.message .message-title {
 	display: block;
 	margin-bottom: 5px;
 	color: var(--danger);
