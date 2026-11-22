@@ -865,16 +865,20 @@ VALUES ('item_save', 'item_save', 'Save an item');
 **The core** is installed by Flyway at application start: `db/migration/V1__core.sql` (one migration since 0.4.0) — schema
 `pgerp`, `pgcrypto`, core tables, functions and views, system actions, administration forms and the "Administration"
 menu item, languages, themes, the `admin` role and the first administrator, translations of core texts, the solution
-development tools and the MCP server. A core change after 0.4.0 is the next migration in `db/migration`; applied migrations never
-change. Databases created before 0.4.0 are not upgraded: the application refuses to start on them and changes nothing. The core (database, Java, client) knows nothing about specific solutions: no names, texts, colours or styles of
+development tools and the MCP server. **While the platform has no users, migrations do not pile up:** the core is one migration `V1__core.sql`, every
+bundled package is one release `V1__<solution>.sql`. A change goes into them, not into a new file; a package is rebuilt
+whole (a solution release from the editor or MCP on a clean database, then the `V1` is replaced). Development databases
+are recreated afterwards: a changed migration has another checksum, and Flyway refuses to start the application on an
+old database. Once there are installations to upgrade, the rule becomes the usual one: applied migrations and releases
+never change, changes come as the next ones (`V2__…`). Databases created before 0.4.0 are not upgraded: the application refuses to start on them and changes nothing. The core (database, Java, client) knows nothing about specific solutions: no names, texts, colours or styles of
 CRM or the examples — everything a solution needs is in its package.
 
 **Application solutions** are packages in `src/main/resources/db/solutions/<folder>/`:
 
 | Package | Default schema | Contents |
 |---|---|---|
-| <nobr>`crm`</nobr> | <nobr>`crm`</nobr> | Companies and contacts, deals through a pipeline with products, tasks and reminders, the deal log, closing a deal without saving (a snapshot of the deal), roles <nobr>`crm_manager`</nobr> / <nobr>`crm_head`</nobr> seeing their own and all deals, notifications <nobr>`ui_push_to_user`</nobr> / <nobr>`ui_push_to_role`</nobr>, PDF reports "Commercial offer" and "Sales pipeline", stage colours in the stage reference table (<nobr>`crm_stages.tone`</nobr>, release 2). Demo data; demo users ivanov, petrova, sidorov — without a password, the administrator sets it |
-| <nobr>`billing`</nobr> | <nobr>`billing`</nobr> | Invoices for goods and services: a catalogue of goods, services and customers, an invoice with lines (master-detail: a lines table with a master, a line form with an item lookup that fills price and VAT, the card total updated from the line form), statuses draft / issued / paid / cancelled with overdue by the payment date, a card draft — closing without saving via a snapshot (release 2), the PDF report "Invoice" (release 2), the role <nobr>`bill_accountant`</nobr>, Russian translations. The finished solution of [the invoices tutorial](docs/tutorial-invoices.md) under other names (<nobr>`bill_`</nobr> instead of <nobr>`inv_`</nobr>) |
+| <nobr>`crm`</nobr> | <nobr>`crm`</nobr> | Companies and contacts, deals through a pipeline with products, tasks and reminders, the deal log, closing a deal without saving (a snapshot of the deal), roles <nobr>`crm_manager`</nobr> / <nobr>`crm_head`</nobr> seeing their own and all deals, notifications <nobr>`ui_push_to_user`</nobr> / <nobr>`ui_push_to_role`</nobr>, PDF reports "Commercial offer" and "Sales pipeline", stage colours in the stage reference table (<nobr>`crm_stages.tone`</nobr>). Demo data; demo users ivanov, petrova, sidorov — without a password, the administrator sets it |
+| <nobr>`billing`</nobr> | <nobr>`billing`</nobr> | Invoices for goods and services: a catalogue of goods, services and customers, an invoice with lines (master-detail: a lines table with a master, a line form with an item lookup that fills price and VAT, the card total updated from the line form), statuses draft / issued / paid / cancelled with overdue by the payment date, a card draft — closing without saving via a snapshot, the PDF report "Invoice", the role <nobr>`bill_accountant`</nobr>, Russian translations. The finished solution of [the invoices tutorial](docs/tutorial-invoices.md) under other names (<nobr>`bill_`</nobr> instead of <nobr>`inv_`</nobr>) |
 | <nobr>`examples`</nobr> | <nobr>`examples`</nobr> | Hello World, division with input checks, the "Falling blocks" game, a chat across all tabs |
 | your solutions | the solution name | Releases from the editor or MCP (see "Solution development") |
 
@@ -1063,4 +1067,5 @@ A published version is not re-released — release the next `PATCH` instead.
 5. Names of sort columns, sources and functions are taken only from metadata and substituted through
    `%I`, `REGCLASS` and `REGPROC`, never from the client request.
 6. The core is versioned by Flyway migrations, application solutions — by the releases of their packages; each is
-   applied once per database and never changes — changes come as new ones. Each solution lives in its own schema.
+   applied once per database. While the platform has no users, the core and bundled packages are one migration each,
+   and changes go into it (see "Migrations and solution packages"); later — as new ones. Each solution lives in its own schema.

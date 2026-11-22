@@ -6,6 +6,9 @@
 --    оплачен, аннулирован; просроченный — по сроку оплаты), итог с НДС.
 --  * Строки счёта — детали: таблица в карточке со свойством «Мастер», строка — отдельная форма
 --    с выбором товара, который подставляет цену и НДС; сохранение строки обновляет итог карточки.
+--  * Черновик карточки: открытие счёта запоминает его снимок (bill_invoice_snapshots); «Закрыть», крестик
+--    и Escape без «Сохранить» удаляют новый счёт со строками или возвращают сохранённый к снимку.
+--  * Печать: отчёт PDF bill_invoice, кнопка «Печать» в карточке и в строках списка.
 --  * Менять и удалять можно только черновик. Роль bill_accountant, меню «Billing», русские переводы.
 --
 -- Готовый вариант решения из руководства docs/tutorial-invoices.ru.md — с другими именами
@@ -61,6 +64,13 @@ CREATE TABLE IF NOT EXISTS bill_invoices (
     CONSTRAINT bill_invoices_check CHECK (((due_date IS NULL) OR (due_date >= invoice_date))),
     CONSTRAINT bill_invoices_number_key UNIQUE (number),
     CONSTRAINT bill_invoices_status_check CHECK (((status)::text = ANY ((ARRAY['draft'::character varying, 'issued'::character varying, 'paid'::character varying, 'cancelled'::character varying])::text[])))
+);
+
+CREATE TABLE IF NOT EXISTS bill_invoice_snapshots (
+    invoice_id bigint NOT NULL,
+    state jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT bill_invoice_snapshots_pkey PRIMARY KEY (invoice_id)
 );
 
 CREATE TABLE IF NOT EXISTS bill_items (
@@ -146,6 +156,69 @@ SELECT ui_grid_page('bill_customers_page', p_data, 'bill_customers_v', NULL, 'na
                     p_search_column => 'search_text', p_search => lower(p_data->>'search'));
 $function$;
 
+CREATE OR REPLACE FUNCTION bill_invoice_cancel(p_data json)
+ RETURNS json
+ LANGUAGE plpgsql
+AS $function$
+-- «Закрыть», крестик и Escape. Если что-то изменено — сначала вопрос; при согласии счёт, созданный
+-- в карточке, удаляется со строками, а сохранённый возвращается к снимку. Шапку берём из формы:
+-- её правки могут быть ещё не записаны
+DECLARE
+    v_id       BIGINT := ui_parse_id(p_data->>'id');
+    v_invoice  bill_invoices%ROWTYPE;
+    v_snapshot bill_invoice_snapshots%ROWTYPE;
+    v_new      BOOLEAN;
+    v_close    JSONB := jsonb_build_array(ui_close_form(), ui_refresh_grid('bill_invoices_grid', p_keep_page => TRUE));
+BEGIN
+    -- Счёт ещё не записывался (строк не добавляли): спросить, только если выбран покупатель
+    IF v_id IS NULL THEN
+        IF NOT ui_confirmed(p_data) AND ui_parse_id(p_data->>'customer_id') IS NOT NULL THEN
+            RETURN ui_ok(ui_confirm('Close without saving? The new invoice will not be created.',
+                                    'bill_invoice_cancel', jsonb_build_object('confirmed', TRUE),
+                                    p_confirm_label => 'Don''t save'));
+        END IF;
+        RETURN ui_ok(ui_close_form());
+    END IF;
+
+    SELECT * INTO v_invoice FROM bill_invoices WHERE id = v_id;
+    IF NOT FOUND THEN
+        RETURN ui_ok(v_close);   -- уже удалён: отменять нечего
+    END IF;
+    SELECT * INTO v_snapshot FROM bill_invoice_snapshots WHERE invoice_id = v_id;
+    v_new := v_snapshot.invoice_id IS NOT NULL AND v_snapshot.state IS NULL;
+
+    IF NOT ui_confirmed(p_data) THEN
+        IF v_new
+           OR (v_snapshot.state IS NOT NULL AND v_snapshot.state IS DISTINCT FROM bill_invoice_state(v_id))
+           OR (v_invoice.status = 'draft' AND
+               jsonb_build_object('invoice_date', v_invoice.invoice_date, 'due_date', v_invoice.due_date,
+                                  'customer_id', v_invoice.customer_id, 'notes', v_invoice.notes)
+               IS DISTINCT FROM
+               jsonb_build_object('invoice_date', ui_parse_date(p_data->>'invoice_date'),
+                                  'due_date', ui_parse_date(p_data->>'due_date'),
+                                  'customer_id', ui_parse_id(p_data->>'customer_id'), 'notes', ui_text(p_data, 'notes'))) THEN
+            RETURN ui_ok(ui_confirm(
+                format(CASE WHEN v_new THEN ui_t('Close without saving? Invoice %s with its lines will be deleted.')
+                            ELSE ui_t('Close without saving? Changes to invoice %s will be discarded.') END,
+                       v_invoice.number),
+                'bill_invoice_cancel', jsonb_build_object('id', v_id::TEXT, 'confirmed', TRUE),
+                p_confirm_label => 'Don''t save'));
+        END IF;
+        -- Ничего не изменено: возвращать нечего
+        DELETE FROM bill_invoice_snapshots WHERE invoice_id = v_id;
+        RETURN ui_ok(ui_close_form());
+    END IF;
+
+    IF v_new THEN
+        DELETE FROM bill_invoices WHERE id = v_id;   -- строки и снимок удалятся каскадом
+    ELSIF v_snapshot.state IS NOT NULL THEN
+        PERFORM bill_invoice_restore(v_id, v_snapshot.state);
+        DELETE FROM bill_invoice_snapshots WHERE invoice_id = v_id;
+    END IF;
+    RETURN ui_ok(v_close);
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION bill_invoice_card(p_id bigint)
  RETURNS jsonb
  LANGUAGE sql
@@ -196,9 +269,14 @@ CREATE OR REPLACE FUNCTION bill_invoice_edit_open(p_data json)
  LANGUAGE plpgsql
 AS $function$
 DECLARE
-    v_card JSONB := bill_invoice_card(ui_parse_id(p_data->>'id'));
+    v_id   BIGINT := ui_parse_id(p_data->>'id');
+    v_card JSONB  := bill_invoice_card(v_id);
 BEGIN
     PERFORM ui_require(v_card IS NOT NULL, 'Invoice not found — it may have been deleted');
+    -- Запомнить сохранённую версию: закрытие без «Сохранить» вернёт к ней. Снимок перезаписывается —
+    -- оставшийся от окна, закрытого вместе с вкладкой браузера, вернул бы счёт в прошлое
+    INSERT INTO bill_invoice_snapshots (invoice_id, state) VALUES (v_id, bill_invoice_state(v_id))
+    ON CONFLICT (invoice_id) DO UPDATE SET state = EXCLUDED.state, created_at = now();
     RETURN ui_ok(ui_open_form('bill_invoice', p_title => format(ui_t('Invoice %s'), v_card->>'number'), p_data => v_card));
 END;
 $function$;
@@ -213,6 +291,7 @@ BEGIN
     PERFORM ui_require(EXISTS (SELECT 1 FROM bill_invoice_lines WHERE invoice_id = v_id),
                        'Add at least one line before issuing the invoice');
     UPDATE bill_invoices SET status = 'issued' WHERE id = v_id;
+    DELETE FROM bill_invoice_snapshots WHERE invoice_id = v_id;
     PERFORM ui_print(format(ui_t('Invoice %s issued'), (SELECT number FROM bill_invoices WHERE id = v_id)));
     RETURN ui_ok(bill_invoice_changed(v_id));
 END;
@@ -239,7 +318,61 @@ DECLARE
 BEGIN
     UPDATE bill_invoices SET status = 'paid' WHERE id = v_id AND status = 'issued';
     PERFORM ui_require(FOUND, 'Only an issued invoice can be marked as paid');
+    DELETE FROM bill_invoice_snapshots WHERE invoice_id = v_id;
     RETURN ui_ok(bill_invoice_changed(v_id));
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION bill_invoice_print_data(p_data json)
+ RETURNS json
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+-- Данные отчёта bill_invoice: ключи верхнего уровня — параметры $P{...}, rows — строки $F{...}
+DECLARE
+    v_invoice  bill_invoices_v%ROWTYPE;
+    v_customer bill_customers%ROWTYPE;
+BEGIN
+    SELECT * INTO v_invoice FROM bill_invoices_v WHERE id = ui_parse_id(p_data->>'invoice_id');
+    PERFORM ui_require(FOUND, 'Invoice not found — it may have been deleted');
+    SELECT * INTO v_customer FROM bill_customers WHERE id = v_invoice.customer_id;
+    RETURN json_build_object(
+        'title', format(ui_t('Invoice %s'), v_invoice.number),
+        'invoice_date', v_invoice.invoice_date,
+        'due_date', v_invoice.due_date,
+        'status', v_invoice.status_badge->>'label',
+        'customer', v_customer.name,
+        'customer_details', concat_ws(' · ', CASE WHEN v_customer.tax_id IS NOT NULL THEN format(ui_t('Tax ID %s'), v_customer.tax_id) END,
+                                      v_customer.address, v_customer.email),
+        'notes', v_invoice.notes,
+        'amount', v_invoice.amount, 'vat', v_invoice.vat, 'total', v_invoice.total,
+        'rows', COALESCE((
+            SELECT json_agg(json_build_object(
+                       'line_no', n, 'item', item, 'unit', unit, 'quantity', quantity, 'price', price,
+                       'amount', amount, 'vat_rate', vat_rate, 'total', total) ORDER BY n)
+            FROM (SELECT row_number() OVER (ORDER BY id) AS n, * FROM bill_invoice_lines_v
+                  WHERE invoice_id = v_invoice.id) l), '[]'));
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION bill_invoice_print(p_data json)
+ RETURNS json
+ LANGUAGE plpgsql
+AS $function$
+-- «Печать»: из карточки сначала записывается шапка черновика, из строки списка приходит только id
+DECLARE
+    v_id     BIGINT := ui_parse_id(p_data->>'id');
+    v_number TEXT;
+BEGIN
+    IF p_data->>'invoice_date' IS NOT NULL
+       AND (v_id IS NULL OR (SELECT status FROM bill_invoices WHERE id = v_id) = 'draft') THEN
+        v_id := bill_invoice_upsert(p_data);
+    END IF;
+    SELECT number INTO v_number FROM bill_invoices WHERE id = v_id;
+    PERFORM ui_require(FOUND, 'Invoice not found — it may have been deleted');
+    PERFORM ui_require(EXISTS (SELECT 1 FROM bill_invoice_lines WHERE invoice_id = v_id),
+                       'Add at least one line before printing the invoice');
+    RETURN ui_ok(ui_report('bill_invoice', jsonb_build_object('invoice_id', v_id), format(ui_t('Invoice %s'), v_number)));
 END;
 $function$;
 
@@ -257,6 +390,22 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION bill_invoice_restore(p_id bigint, p_state jsonb)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+    UPDATE bill_invoices i
+    SET invoice_date = s.invoice_date, due_date = s.due_date, customer_id = s.customer_id,
+        status = s.status, notes = s.notes
+    FROM jsonb_populate_record(NULL::bill_invoices, p_state->'invoice') s
+    WHERE i.id = p_id;
+    DELETE FROM bill_invoice_lines WHERE invoice_id = p_id;
+    INSERT INTO bill_invoice_lines
+    SELECT * FROM jsonb_populate_recordset(NULL::bill_invoice_lines, p_state->'lines');
+END;
+$function$;
+
 CREATE OR REPLACE FUNCTION bill_invoice_save(p_data json)
  RETURNS json
  LANGUAGE plpgsql
@@ -264,6 +413,7 @@ AS $function$
 DECLARE
     v_id BIGINT := bill_invoice_upsert(p_data);
 BEGIN
+    DELETE FROM bill_invoice_snapshots WHERE invoice_id = v_id;   -- изменения приняты
     RETURN ui_ok(ui_close_form(), ui_refresh_grid('bill_invoices_grid', p_keep_page => TRUE),
                  ui_message(format(ui_t('Invoice %s saved'), (SELECT number FROM bill_invoices WHERE id = v_id))));
 END;
@@ -276,7 +426,19 @@ CREATE OR REPLACE FUNCTION bill_invoices_page(p_data json)
 AS $function$
 SELECT ui_grid_page('bill_invoices_page', p_data, 'bill_invoices_v', NULL, 'date_text', 'desc',
                     p_search_column => 'search_text', p_search => lower(p_data->>'search'),
-                    p_filters => jsonb_build_object('status', p_data->>'status_filter'));
+                    p_filters => jsonb_build_object('status', p_data->>'status_filter', 'is_new', 'false'));
+$function$;
+
+CREATE OR REPLACE FUNCTION bill_invoice_state(p_id bigint)
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+    SELECT jsonb_build_object(
+        'invoice', to_jsonb(i) - 'created_at',
+        'lines', COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id)
+                           FROM bill_invoice_lines l WHERE l.invoice_id = i.id), '[]'::JSONB))
+    FROM bill_invoices i WHERE i.id = p_id;
 $function$;
 
 CREATE OR REPLACE FUNCTION bill_invoice_totals(p_id bigint)
@@ -309,6 +471,8 @@ BEGIN
         INSERT INTO bill_invoices (id, number, invoice_date, due_date, customer_id, notes, created_by)
         VALUES (v_id, format('INV-%s-%s', to_char(v_date, 'YYYY'), lpad(v_id::TEXT, 5, '0')),
                 v_date, v_due, v_customer, v_notes, ui_user());
+        -- Счёт создан в карточке: снимок без состояния — закрытие без «Сохранить» его удалит
+        INSERT INTO bill_invoice_snapshots (invoice_id, state) VALUES (v_id, NULL);
     ELSE
         PERFORM bill_invoice_require_draft(v_id);
         UPDATE bill_invoices SET invoice_date = v_date, due_date = v_due, customer_id = v_customer, notes = v_notes
@@ -325,13 +489,16 @@ AS $function$
 DECLARE
     v_id BIGINT := ui_parse_id(p_data->>'id');
 BEGIN
-    PERFORM ui_require(v_id IS NOT NULL, 'The invoice is not saved yet — just close it');
+    PERFORM ui_require(v_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM bill_invoice_snapshots
+                                                        WHERE invoice_id = v_id AND state IS NULL),
+                       'The invoice is not saved yet — just close it');
     IF NOT ui_confirmed(p_data) THEN
         RETURN ui_ok(ui_confirm('Cancel this invoice? It cannot be changed afterwards.', 'bill_invoice_void',
                                 jsonb_build_object('id', v_id, 'confirmed', TRUE), p_confirm_label => 'Cancel invoice'));
     END IF;
     UPDATE bill_invoices SET status = 'cancelled' WHERE id = v_id AND status IN ('draft', 'issued');
     PERFORM ui_require(FOUND, 'Only a draft or an issued invoice can be cancelled');
+    DELETE FROM bill_invoice_snapshots WHERE invoice_id = v_id;
     RETURN ui_ok(bill_invoice_changed(v_id));
 END;
 $function$;
@@ -618,7 +785,10 @@ CREATE OR REPLACE VIEW bill_invoices_v AS
     COALESCE(t.amount, 0::numeric) AS amount,
     COALESCE(t.vat, 0::numeric) AS vat,
     COALESCE(t.total, 0::numeric) AS total,
-    lower(concat_ws(' '::text, v.number, c.name)) AS search_text
+    lower(concat_ws(' '::text, v.number, c.name)) AS search_text,
+    (EXISTS ( SELECT 1
+           FROM bill_invoice_snapshots s
+          WHERE s.invoice_id = v.id AND s.state IS NULL)) AS is_new
    FROM bill_invoices v
      JOIN bill_customers c ON c.id = v.customer_id
      LEFT JOIN ( SELECT bill_invoice_lines_v.invoice_id,
@@ -650,6 +820,14 @@ DO $c$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'bill_invoices'::regclass AND conname = 'bill_invoices_customer_id_fkey') THEN
         ALTER TABLE bill_invoices ADD CONSTRAINT bill_invoices_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES bill_customers(id) ON DELETE RESTRICT;
+    END IF;
+END;
+$c$;
+
+DO $c$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'bill_invoice_snapshots'::regclass AND conname = 'bill_invoice_snapshots_invoice_id_fkey') THEN
+        ALTER TABLE bill_invoice_snapshots ADD CONSTRAINT bill_invoice_snapshots_invoice_id_fkey FOREIGN KEY (invoice_id) REFERENCES bill_invoices(id) ON DELETE CASCADE;
     END IF;
 END;
 $c$;
@@ -702,6 +880,12 @@ COMMENT ON COLUMN bill_invoices.notes IS 'Notes';
 
 COMMENT ON COLUMN bill_invoices.created_by IS 'Author login';
 
+COMMENT ON TABLE bill_invoice_snapshots IS 'Saved state of an invoice open in its card; state NULL — created in the card';
+
+COMMENT ON COLUMN bill_invoice_snapshots.invoice_id IS 'Invoice';
+
+COMMENT ON COLUMN bill_invoice_snapshots.state IS 'Header and lines when the card was opened; NULL — a new invoice';
+
 COMMENT ON TABLE bill_items IS 'Goods and services';
 
 COMMENT ON COLUMN bill_items.name IS 'Name';
@@ -721,11 +905,14 @@ INSERT INTO pgerp.ui_actions (action_name, function_name, description, everyone)
     ('bill_customer_save', 'bill_customer_save', 'Invoices: save customer', 'false'),
     ('bill_customer_select_open', 'bill_customer_select_open', 'Invoices: choose a customer', 'false'),
     ('bill_customers_page', 'bill_customers_page', 'Invoices: customers list', 'false'),
+    ('bill_invoice_cancel', 'bill_invoice_cancel', 'Invoices: close the invoice card', 'false'),
     ('bill_invoice_delete', 'bill_invoice_delete', 'Invoices: delete a draft invoice', 'false'),
     ('bill_invoice_edit_open', 'bill_invoice_edit_open', 'Invoices: open invoice', 'false'),
     ('bill_invoice_issue', 'bill_invoice_issue', 'Invoices: issue invoice', 'false'),
     ('bill_invoice_new_open', 'bill_invoice_new_open', 'Invoices: new invoice', 'false'),
     ('bill_invoice_pay', 'bill_invoice_pay', 'Invoices: mark invoice as paid', 'false'),
+    ('bill_invoice_print', 'bill_invoice_print', 'Invoices: print invoice (PDF)', 'false'),
+    ('bill_invoice_print_data', 'bill_invoice_print_data', 'Invoices: invoice report data', 'false'),
     ('bill_invoice_save', 'bill_invoice_save', 'Invoices: save invoice', 'false'),
     ('bill_invoices_page', 'bill_invoices_page', 'Invoices: invoice list', 'false'),
     ('bill_invoice_void', 'bill_invoice_void', 'Invoices: cancel invoice', 'false'),
@@ -748,7 +935,7 @@ ON CONFLICT (action_name) DO UPDATE SET function_name = EXCLUDED.function_name, 
 INSERT INTO pgerp.forms (form_name, title, cancel_action, folder) VALUES
     ('bill_customer', 'Customer', NULL, 'Billing'),
     ('bill_customers', 'Customers', NULL, 'Billing'),
-    ('bill_invoice', 'Invoice', NULL, 'Billing'),
+    ('bill_invoice', 'Invoice', 'bill_invoice_cancel', 'Billing'),
     ('bill_invoices', 'Invoices', NULL, 'Billing'),
     ('bill_item', 'Goods or service', NULL, 'Billing'),
     ('bill_items', 'Goods and services', NULL, 'Billing'),
@@ -774,7 +961,8 @@ INSERT INTO pgerp.form_components (form_name, sort_order, component_type, compon
     ('bill_invoice', '12', 'button', 'btn_issue', 'Issue', 'bill_invoice_issue', NULL, NULL, NULL),
     ('bill_invoice', '13', 'button', 'btn_pay', 'Paid', 'bill_invoice_pay', NULL, NULL, NULL),
     ('bill_invoice', '14', 'button', 'btn_void', 'Cancel invoice', 'bill_invoice_void', NULL, NULL, NULL),
-    ('bill_invoice', '15', 'button', 'btn_close', 'Close', 'form_close', NULL, NULL, NULL),
+    ('bill_invoice', '15', 'button', 'btn_print', 'Print', 'bill_invoice_print', NULL, NULL, NULL),
+    ('bill_invoice', '16', 'button', 'btn_close', 'Close', 'bill_invoice_cancel', NULL, NULL, NULL),
     ('bill_invoice', '2', 'display', 'number', 'Number', NULL, NULL, NULL, '{"column": 1}'),
     ('bill_invoice', '3', 'date', 'invoice_date', 'Date', NULL, NULL, NULL, '{"column": 1}'),
     ('bill_invoice', '4', 'lookup', 'customer_id', 'Customer', 'bill_customer_select_open', NULL, NULL, '{"column": 1}'),
@@ -807,7 +995,7 @@ INSERT INTO pgerp.form_components (form_name, sort_order, component_type, compon
     ('bill_line', '7', 'button', 'btn_save', 'Save', 'bill_line_save', NULL, NULL, NULL),
     ('bill_line', '8', 'button', 'btn_cancel', 'Cancel', 'form_close', NULL, NULL, NULL);
 
-DELETE FROM pgerp.grid_columns WHERE action_name IN ('bill_customer_edit_open', 'bill_customer_new_open', 'bill_customer_save', 'bill_customer_select_open', 'bill_customers_page', 'bill_invoice_delete', 'bill_invoice_edit_open', 'bill_invoice_issue', 'bill_invoice_new_open', 'bill_invoice_pay', 'bill_invoice_save', 'bill_invoices_page', 'bill_invoice_void', 'bill_item_delete', 'bill_item_edit_open', 'bill_item_new_open', 'bill_item_save', 'bill_item_select_open', 'bill_items_page', 'bill_kinds_combo', 'bill_line_delete', 'bill_line_edit_open', 'bill_line_new_open', 'bill_line_save', 'bill_lines_page', 'bill_statuses_combo');
+DELETE FROM pgerp.grid_columns WHERE action_name IN ('bill_customer_edit_open', 'bill_customer_new_open', 'bill_customer_save', 'bill_customer_select_open', 'bill_customers_page', 'bill_invoice_cancel', 'bill_invoice_delete', 'bill_invoice_edit_open', 'bill_invoice_issue', 'bill_invoice_new_open', 'bill_invoice_pay', 'bill_invoice_print', 'bill_invoice_print_data', 'bill_invoice_save', 'bill_invoices_page', 'bill_invoice_void', 'bill_item_delete', 'bill_item_edit_open', 'bill_item_new_open', 'bill_item_save', 'bill_item_select_open', 'bill_items_page', 'bill_kinds_combo', 'bill_line_delete', 'bill_line_edit_open', 'bill_line_new_open', 'bill_line_save', 'bill_lines_page', 'bill_statuses_combo');
 INSERT INTO pgerp.grid_columns (action_name, display_order, field_name, column_title, cell_type, sort_column) VALUES
     ('bill_customers_page', '1', 'name', 'Name', 'text', 'name'),
     ('bill_customers_page', '2', 'tax_id', 'Tax ID', 'text', NULL),
@@ -830,15 +1018,147 @@ INSERT INTO pgerp.grid_columns (action_name, display_order, field_name, column_t
     ('bill_lines_page', '5', 'amount', 'Amount', 'money', NULL),
     ('bill_lines_page', '6', 'vat_rate', 'VAT, %', 'number', NULL),
     ('bill_lines_page', '7', 'total', 'Total', 'money', NULL);
-DELETE FROM pgerp.grid_row_actions WHERE source_action IN ('bill_customer_edit_open', 'bill_customer_new_open', 'bill_customer_save', 'bill_customer_select_open', 'bill_customers_page', 'bill_invoice_delete', 'bill_invoice_edit_open', 'bill_invoice_issue', 'bill_invoice_new_open', 'bill_invoice_pay', 'bill_invoice_save', 'bill_invoices_page', 'bill_invoice_void', 'bill_item_delete', 'bill_item_edit_open', 'bill_item_new_open', 'bill_item_save', 'bill_item_select_open', 'bill_items_page', 'bill_kinds_combo', 'bill_line_delete', 'bill_line_edit_open', 'bill_line_new_open', 'bill_line_save', 'bill_lines_page', 'bill_statuses_combo');
+DELETE FROM pgerp.grid_row_actions WHERE source_action IN ('bill_customer_edit_open', 'bill_customer_new_open', 'bill_customer_save', 'bill_customer_select_open', 'bill_customers_page', 'bill_invoice_cancel', 'bill_invoice_delete', 'bill_invoice_edit_open', 'bill_invoice_issue', 'bill_invoice_new_open', 'bill_invoice_pay', 'bill_invoice_print', 'bill_invoice_print_data', 'bill_invoice_save', 'bill_invoices_page', 'bill_invoice_void', 'bill_item_delete', 'bill_item_edit_open', 'bill_item_new_open', 'bill_item_save', 'bill_item_select_open', 'bill_items_page', 'bill_kinds_combo', 'bill_line_delete', 'bill_line_edit_open', 'bill_line_new_open', 'bill_line_save', 'bill_lines_page', 'bill_statuses_combo');
 INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label, style) VALUES
     ('bill_customers_page', '1', 'bill_customer_edit_open', 'Edit', 'default'),
     ('bill_invoices_page', '1', 'bill_invoice_edit_open', 'Open', 'default'),
-    ('bill_invoices_page', '2', 'bill_invoice_delete', 'Delete', 'danger'),
+    ('bill_invoices_page', '2', 'bill_invoice_print', 'Print', 'default'),
+    ('bill_invoices_page', '3', 'bill_invoice_delete', 'Delete', 'danger'),
     ('bill_items_page', '1', 'bill_item_edit_open', 'Edit', 'default'),
     ('bill_items_page', '2', 'bill_item_delete', 'Delete', 'danger'),
     ('bill_lines_page', '1', 'bill_line_edit_open', 'Edit', 'default'),
     ('bill_lines_page', '2', 'bill_line_delete', 'Remove', 'danger');
+
+INSERT INTO pgerp.reports (name, title, data_action, sample_params, jrxml) VALUES
+    ('bill_invoice', 'Invoice', 'bill_invoice_print_data', '{"invoice_id": 1}', '<jasperReport name="bill_invoice" pageWidth="595" pageHeight="842" columnWidth="515" leftMargin="40" rightMargin="40" topMargin="40" bottomMargin="30">
+	<!-- Invoice: parameters come from bill_invoice_print_data, rows are the invoice lines -->
+	<parameter name="title" class="java.lang.String"/>
+	<parameter name="invoice_date" class="java.util.Date"/>
+	<parameter name="due_date" class="java.util.Date"/>
+	<parameter name="status" class="java.lang.String"/>
+	<parameter name="customer" class="java.lang.String"/>
+	<parameter name="customer_details" class="java.lang.String"/>
+	<parameter name="notes" class="java.lang.String"/>
+	<parameter name="amount" class="java.math.BigDecimal"/>
+	<parameter name="vat" class="java.math.BigDecimal"/>
+	<parameter name="total" class="java.math.BigDecimal"/>
+	<field name="line_no" class="java.lang.Integer"/>
+	<field name="item" class="java.lang.String"/>
+	<field name="unit" class="java.lang.String"/>
+	<field name="quantity" class="java.math.BigDecimal"/>
+	<field name="price" class="java.math.BigDecimal"/>
+	<field name="amount" class="java.math.BigDecimal"/>
+	<field name="vat_rate" class="java.math.BigDecimal"/>
+	<field name="total" class="java.math.BigDecimal"/>
+	<title height="120">
+		<element kind="rectangle" x="0" y="0" width="515" height="4" mode="Opaque" backcolor="#0969DA">
+			<pen lineWidth="0.0"/>
+		</element>
+		<element kind="textField" x="0" y="14" width="380" height="30" fontSize="20.0" bold="true">
+			<expression><![CDATA[$P{title}]]></expression>
+		</element>
+		<element kind="textField" x="380" y="20" width="135" height="20" hTextAlign="Right" forecolor="#59636E">
+			<expression><![CDATA[$P{status}]]></expression>
+		</element>
+		<element kind="textField" x="0" y="44" width="515" height="18" forecolor="#59636E">
+			<expression><![CDATA[$R{dated} + " " + new java.text.SimpleDateFormat("dd.MM.yyyy").format($P{invoice_date})
+				+ ($P{due_date} == null ? "" : " · " + $R{Pay by} + " " + new java.text.SimpleDateFormat("dd.MM.yyyy").format($P{due_date}))]]></expression>
+		</element>
+		<element kind="textField" x="0" y="72" width="90" height="18" forecolor="#59636E">
+			<expression><![CDATA[$R{Customer}]]></expression>
+		</element>
+		<element kind="textField" x="90" y="72" width="425" height="18" bold="true">
+			<expression><![CDATA[$P{customer}]]></expression>
+		</element>
+		<element kind="textField" x="90" y="90" width="425" height="16" fontSize="8.0" forecolor="#59636E" textAdjust="StretchHeight">
+			<expression><![CDATA[$P{customer_details}]]></expression>
+		</element>
+	</title>
+	<columnHeader height="24">
+		<element kind="frame" x="0" y="0" width="515" height="22" mode="Opaque" backcolor="#F6F8FA">
+			<element kind="textField" x="4" y="0" width="24" height="22" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA["№"]]></expression>
+			</element>
+			<element kind="textField" x="28" y="0" width="165" height="22" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Goods or service}]]></expression>
+			</element>
+			<element kind="textField" x="193" y="0" width="65" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Qty}]]></expression>
+			</element>
+			<element kind="textField" x="258" y="0" width="70" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Price}]]></expression>
+			</element>
+			<element kind="textField" x="328" y="0" width="75" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Amount}]]></expression>
+			</element>
+			<element kind="textField" x="403" y="0" width="45" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{VAT, %}]]></expression>
+			</element>
+			<element kind="textField" x="448" y="0" width="63" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Total}]]></expression>
+			</element>
+		</element>
+	</columnHeader>
+	<detail>
+		<band height="22">
+			<element kind="textField" x="4" y="2" width="24" height="18" fontSize="9.0">
+				<expression><![CDATA[$F{line_no}]]></expression>
+			</element>
+			<element kind="textField" x="28" y="2" width="165" height="18" fontSize="9.0" textAdjust="StretchHeight">
+				<expression><![CDATA[$F{item}]]></expression>
+			</element>
+			<element kind="textField" x="193" y="2" width="65" height="18" hTextAlign="Right" fontSize="9.0">
+				<expression><![CDATA[new java.text.DecimalFormat("#,##0.###", java.text.DecimalFormatSymbols.getInstance($P{REPORT_LOCALE})).format($F{quantity}) + " " + $F{unit}]]></expression>
+			</element>
+			<element kind="textField" x="258" y="2" width="70" height="18" hTextAlign="Right" fontSize="9.0" pattern="#,##0.00">
+				<expression><![CDATA[$F{price}]]></expression>
+			</element>
+			<element kind="textField" x="328" y="2" width="75" height="18" hTextAlign="Right" fontSize="9.0" pattern="#,##0.00">
+				<expression><![CDATA[$F{amount}]]></expression>
+			</element>
+			<element kind="textField" x="403" y="2" width="45" height="18" hTextAlign="Right" fontSize="9.0">
+				<expression><![CDATA[new java.text.DecimalFormat("#,##0.##", java.text.DecimalFormatSymbols.getInstance($P{REPORT_LOCALE})).format($F{vat_rate})]]></expression>
+			</element>
+			<element kind="textField" x="448" y="2" width="63" height="18" hTextAlign="Right" fontSize="9.0" pattern="#,##0.00">
+				<expression><![CDATA[$F{total}]]></expression>
+			</element>
+			<element kind="line" x="0" y="21" width="515" height="1" forecolor="#EFF2F5"/>
+		</band>
+	</detail>
+	<pageFooter height="20">
+		<element kind="textField" x="0" y="0" width="315" height="20" forecolor="#59636E" fontSize="8.0">
+			<expression><![CDATA[$P{title} + " · " + $P{customer}]]></expression>
+		</element>
+		<element kind="textField" x="315" y="0" width="200" height="20" hTextAlign="Right" forecolor="#59636E" fontSize="8.0">
+			<expression><![CDATA[$R{Page} + " " + $V{PAGE_NUMBER}]]></expression>
+		</element>
+	</pageFooter>
+	<summary height="110">
+		<element kind="textField" x="195" y="10" width="195" height="18" hTextAlign="Right">
+			<expression><![CDATA[$R{Amount without VAT}]]></expression>
+		</element>
+		<element kind="textField" x="395" y="10" width="116" height="18" hTextAlign="Right" pattern="#,##0.00">
+			<expression><![CDATA[$P{amount}]]></expression>
+		</element>
+		<element kind="textField" x="195" y="28" width="195" height="18" hTextAlign="Right">
+			<expression><![CDATA[$R{VAT}]]></expression>
+		</element>
+		<element kind="textField" x="395" y="28" width="116" height="18" hTextAlign="Right" pattern="#,##0.00">
+			<expression><![CDATA[$P{vat}]]></expression>
+		</element>
+		<element kind="textField" x="195" y="48" width="195" height="22" hTextAlign="Right" bold="true" fontSize="12.0">
+			<expression><![CDATA[$R{Total due}]]></expression>
+		</element>
+		<element kind="textField" x="395" y="48" width="116" height="22" hTextAlign="Right" bold="true" fontSize="12.0" pattern="#,##0.00">
+			<expression><![CDATA[$P{total}]]></expression>
+		</element>
+		<element kind="textField" x="0" y="80" width="515" height="26" fontSize="9.0" forecolor="#59636E" textAdjust="StretchHeight">
+			<expression><![CDATA[$P{notes} == null ? "" : $R{Notes} + ": " + $P{notes}]]></expression>
+		</element>
+	</summary>
+</jasperReport>')
+ON CONFLICT (name) DO UPDATE SET title = EXCLUDED.title, data_action = EXCLUDED.data_action,
+    sample_params = EXCLUDED.sample_params, jrxml = EXCLUDED.jrxml, updated_at = now();
 
 INSERT INTO pgerp.roles (role_name, title) VALUES
     ('bill_accountant', 'Billing: accountant')
@@ -872,10 +1192,12 @@ SELECT pgerp.solution_menu_apply('Billing', '[
 INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Add', 'Добавить'),
     ('ru', 'Add at least one line before issuing the invoice', 'Добавьте в счёт хотя бы одну строку'),
+    ('ru', 'Add at least one line before printing the invoice', 'Добавьте в счёт хотя бы одну строку, чтобы его напечатать'),
     ('ru', 'Add line', 'Добавить строку'),
     ('ru', 'Address', 'Адрес'),
     ('ru', 'All', 'Все'),
     ('ru', 'Amount', 'Сумма'),
+    ('ru', 'Amount without VAT', 'Сумма без НДС'),
     ('ru', 'Billing', 'Счета на оплату'),
     ('ru', 'Billing: accountant', 'Счета на оплату: бухгалтер'),
     ('ru', 'Cancel', 'Отмена'),
@@ -886,10 +1208,14 @@ INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Choose goods or a service', 'Выберите товар или услугу'),
     ('ru', 'Choose goods or service', 'Выберите товар или услугу'),
     ('ru', 'Close', 'Закрыть'),
+    ('ru', 'Close without saving? Changes to invoice %s will be discarded.', 'Закрыть без сохранения? Изменения счёта %s будут отменены.'),
+    ('ru', 'Close without saving? Invoice %s with its lines will be deleted.', 'Закрыть без сохранения? Счёт %s со строками будет удалён.'),
+    ('ru', 'Close without saving? The new invoice will not be created.', 'Закрыть без сохранения? Новый счёт не будет создан.'),
     ('ru', 'Customer', 'Покупатель'),
     ('ru', 'Customer not found — it may have been deleted', 'Покупатель не найден — возможно, его удалили'),
     ('ru', 'Customers', 'Покупатели'),
     ('ru', 'Date', 'Дата'),
+    ('ru', 'dated', 'от'),
     ('ru', 'Delete', 'Удалить'),
     ('ru', 'Delete invoice %s?', 'Удалить счёт %s?'),
     ('ru', 'Delete “%s”?', 'Удалить «%s»?'),
@@ -899,6 +1225,7 @@ INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Enter the customer name', 'Укажите название покупателя'),
     ('ru', 'Enter the invoice date', 'Укажите дату счёта'),
     ('ru', 'Enter the name', 'Укажите название'),
+    ('ru', 'Form', 'Форма'),
     ('ru', 'Goods', 'Товар'),
     ('ru', 'Goods and services', 'Товары и услуги'),
     ('ru', 'Goods or service', 'Товар или услуга'),
@@ -928,11 +1255,13 @@ INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Only an issued invoice can be marked as paid', 'Оплаченным можно отметить только выставленный счёт'),
     ('ru', 'Open', 'Открыть'),
     ('ru', 'Overdue', 'Просрочен'),
+    ('ru', 'Page', 'Страница'),
     ('ru', 'Paid', 'Оплачен'),
     ('ru', 'Pay by', 'Оплатить до'),
     ('ru', 'Price', 'Цена'),
     ('ru', 'Price must be a number, e.g. 1500 or 99.90', 'Цена — число, например 1500 или 99,90'),
     ('ru', 'Price without VAT', 'Цена без НДС'),
+    ('ru', 'Print', 'Печать'),
     ('ru', 'Qty', 'Кол-во'),
     ('ru', 'Quantity', 'Количество'),
     ('ru', 'Quantity must be a number greater than zero', 'Количество — число больше нуля'),
@@ -944,11 +1273,13 @@ INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Status', 'Состояние'),
     ('ru', '%s (without VAT %s, VAT %s)', '%s (без НДС %s, НДС %s)'),
     ('ru', 'Tax ID', 'ИНН'),
+    ('ru', 'Tax ID %s', 'ИНН %s'),
     ('ru', 'The invoice is not saved yet — just close it', 'Счёт ещё не сохранён — просто закройте его'),
     ('ru', 'The payment date cannot be earlier than the invoice date', 'Срок оплаты не может быть раньше даты счёта'),
     ('ru', 'There is already a customer with this name', 'Покупатель с таким названием уже есть'),
     ('ru', 'There is already an item with this name', 'Товар или услуга с таким названием уже есть'),
     ('ru', 'Total', 'Итого'),
+    ('ru', 'Total due', 'Итого к оплате'),
     ('ru', 'Unit', 'Ед. изм.'),
     ('ru', 'VAT', 'НДС'),
     ('ru', 'VAT, %', 'НДС, %'),
