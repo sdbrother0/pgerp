@@ -22,7 +22,7 @@ docker compose up -d
 ```
 
 The `ghcr.io/sdbrother0/pgerp` image is pulled from GitHub Container Registry. To pin a version instead of the latest —
-`ERP_VERSION=0.4.0 docker compose up -d`; to update — `docker compose pull && docker compose up -d`. To build the image
+`ERP_VERSION=0.4.1 docker compose up -d`; to update — `docker compose pull && docker compose up -d`. To build the image
 from sources (in a clone of the repository) — `docker compose up -d --build`.
 
 Versions, release notes and the jar: [GitHub Releases](https://github.com/sdbrother0/pgerp/releases).
