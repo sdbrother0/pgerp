@@ -994,7 +994,7 @@ Tests need PostgreSQL with an `erp` database (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | push to `main`, pull request, manual | `./mvnw verify` on JDK 25 with a PostgreSQL 18 service container; the jar is kept as the `pgerp-jar` artifact of the run |
-| `release.yml` | push of a `v*` tag | checks that the tag matches the version in `pom.xml`, builds with tests, creates a GitHub Release with `pgerp-<version>.jar` and release notes, publishes the `linux/amd64` and `linux/arm64` image `ghcr.io/sdbrother0/pgerp` with tags `<version>`, `<major>.<minor>` and `latest` |
+| `release.yml` | push of a `v*` tag | checks that the tag matches the version in `pom.xml`, builds with tests, publishes the `linux/amd64` and `linux/arm64` image `ghcr.io/sdbrother0/pgerp` with tags `<version>`, `<major>.<minor>` and `latest`, then creates a GitHub Release with `pgerp-<version>.jar` and release notes |
 
 ## Releasing a version
 
@@ -1006,16 +1006,17 @@ The version is set in one place — `<version>` in `pom.xml` (semantic versionin
 2. Create an annotated tag with the same version: `git tag -a v0.2.0 -m "PgERP 0.2.0"`.
 3. Push the commit and the tag: `git push origin main v0.2.0`.
 4. Watch the build: the Actions tab on GitHub or `gh run list` / `gh run watch`. If the tag does not match `pom.xml`
-   or the tests fail, the release is not created and the image is not published.
+   or the tests fail, the release is not created and the image is not published. If the image build fails, the release
+   is not created either.
 
 The result is the release page `https://github.com/sdbrother0/pgerp/releases/tag/v0.2.0` with the jar and the image
 `ghcr.io/sdbrother0/pgerp:0.2.0` (also `:0.2` and `:latest`). `compose.yaml` runs `latest` by default; a specific
 version — `ERP_VERSION=0.2.0 docker compose up -d`.
 
-A failed release is fixed with a new commit; the tag is then moved to it:
-`git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0`, then steps 2–3 again (if the GitHub Release was already
-created, delete it first: `gh release delete v0.2.0`). A version that has already been published is not re-released —
-release the next `PATCH` instead.
+A release that failed before the image was published is fixed with a new commit; the tag is then moved to it:
+`git tag -d v0.2.0 && git push origin :refs/tags/v0.2.0`, then steps 2–3 again. A version is published as soon as its
+image is: if only creating the GitHub Release failed, re-run the same run (`gh run rerun <id>`) without moving the tag.
+A published version is not re-released — release the next `PATCH` instead.
 
 ## Principles
 

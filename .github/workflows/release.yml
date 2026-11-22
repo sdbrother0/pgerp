@@ -1,5 +1,5 @@
 # Выпуск версии: git tag v0.1.0 && git push origin v0.1.0
-# Собирает jar (с тестами), создаёт GitHub Release с jar и публикует Docker-образ в ghcr.io.
+# Собирает jar (с тестами), публикует Docker-образ в ghcr.io, затем создаёт GitHub Release с jar.
 name: Release
 
 on:
@@ -60,14 +60,6 @@ jobs:
       - name: Compose smoke test (upgrade of a 0.2.2 volume)
         run: sh .github/scripts/compose_smoke.sh
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          cp target/pgerp-${VERSION}.jar pgerp-${VERSION}.jar
-          gh release create "$GITHUB_REF_NAME" pgerp-${VERSION}.jar \
-            --title "PgERP $VERSION" --generate-notes
-
       # Эмуляция arm64 — для RUN этапа запуска в Dockerfile
       - uses: docker/setup-qemu-action@v4
         with:
@@ -99,3 +91,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Последним: релиза без образа не бывает
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp target/pgerp-${VERSION}.jar pgerp-${VERSION}.jar
+          gh release create "$GITHUB_REF_NAME" pgerp-${VERSION}.jar \
+            --title "PgERP $VERSION" --generate-notes

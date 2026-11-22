@@ -59,6 +59,11 @@ echo "ok   sign-in after the upgrade"
 [ "$(su_sql "SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = 'postgres'")" = t ] ||
 	{ echo "FAIL postgres still has a password"; exit 1; }
 echo "ok   application role, data, no postgres password"
+init=$(new ps -aq db-init)
+[ -n "$init" ] || { echo "FAIL no db-init container"; exit 1; }
+volumes=$(docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Destination}} {{end}}{{end}}' "$init")
+[ "$volumes" = "/var/run/postgresql " ] || { echo "FAIL db-init volumes: $volumes"; exit 1; }
+echo "ok   db-init has no volume of its own"
 
 new down
 new up -d --no-build

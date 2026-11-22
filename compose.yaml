@@ -43,6 +43,9 @@ services:
       PGOPTIONS: -c event_triggers=off -c search_path=pg_catalog,pg_temp -c row_security=off
     volumes:
       - db-socket:/var/run/postgresql
+    # В образе объявлен VOLUME: без tmpfs каждый новый контейнер оставлял бы анонимный том
+    tmpfs:
+      - /var/lib/postgresql
     entrypoint: ["sh", "-c"]
     command:
       - |
