@@ -236,6 +236,13 @@ export function showMessage(text, kind = 'info') {
 	const ok = document.createElement('button');
 	ok.textContent = 'OK';
 	form.append(ok);
+	// Ошибка: заголовок над текстом — на языке пользователя
+	if (kind === 'error') {
+		const title = document.createElement('strong');
+		title.className = 'message-title';
+		title.textContent = t('Error');
+		dialog.append(title);
+	}
 	dialog.append(p, form);
 	dialog.addEventListener('close', () => dialog.remove());
 	document.body.append(dialog);

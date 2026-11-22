@@ -3,7 +3,7 @@
 # Example: invoices for goods and services (master-detail)
 
 A step-by-step guide: the "Invoices" solution — a catalogue of goods, services and customers, an invoice with lines,
-totals with VAT, statuses and permissions. The main topic is **master-detail**: a document card (the master) and the
+totals with VAT, statuses, a draft (closing without saving), printing to PDF and permissions. The main topic is **master-detail**: a document card (the master) and the
 table of its lines (the details), which are edited in a separate form and update the card total right away. The solution
 depends on nothing: neither CRM nor the examples are needed.
 
@@ -20,19 +20,20 @@ The basics — table, card, list, row buttons, menu, role, release — are cover
 |---|---|---|
 | 0 | MCP access | connecting an AI agent — if it builds the solution |
 | 1 | Solutions | solution <nobr>`invoices`</nobr> with prefix <nobr>`inv_`</nobr> |
-| 2–3 | Data schema | four tables and four views |
+| 2–3 | Data schema | five tables and four views |
 | 4 | SQL console | helper functions and catalogue actions |
 | 5 | Form editor | goods, services and customers: lists and cards |
 | 6 | Console, form editor | invoice list |
 | 7–8 | Console, form editor | invoice card (master) and invoice line (details) |
-| 9–10 | Form editor, console | table columns and row buttons |
-| 11–13 | Menu, roles, translations | menu items, role <nobr>`inv_accountant`</nobr>, Russian interface |
-| 14–15 | Application | working and testing |
-| 16 | Solutions | release — the solution package |
+| 9–10 | Console, form editor, reports | a draft (closing without saving) and printing the invoice to PDF |
+| 11–12 | Form editor, console | table columns and row buttons |
+| 13–15 | Menu, roles, translations | menu items, role <nobr>`inv_accountant`</nobr>, Russian interface |
+| 16–17 | Application | working and testing |
+| 18 | Solutions | release — the solution package |
 
 ## 0. Connecting MCP
 
-You can build the solution by hand following steps 1–16, or hand it to an AI agent: the application's MCP server gives
+You can build the solution by hand following steps 1–18, or hand it to an AI agent: the application's MCP server gives
 the agent the same actions as the editor, with the rights of the token owner. This whole example was built and tested by
 an agent over MCP. If you build by hand, skip this step.
 
@@ -47,7 +48,7 @@ an agent over MCP. If you build by hand, skip this step.
 3. Connect Claude Code. Take the address from "Server address" of your installation:
 
    ```bash
-   claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <token>"
+   claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <token>"
    ```
 
 4. Check: in Claude Code the `/mcp` command shows the `pgerp` server as connected, and the request "call
@@ -94,7 +95,7 @@ A ready-made request for the agent is [at the end](#the-same-with-an-ai-agent-mc
 - **Document rules live in the database.** Only a draft can be changed; only an invoice with lines can be issued; only
   a draft can be deleted. The checks are in the functions, so neither a form nor MCP can bypass them.
 
-> Interface texts (titles, labels, messages) are written in English — the platform's source language. Step 13
+> Interface texts (titles, labels, messages) are written in English — the platform's source language. Step 15
 > "Translations" adds the Russian interface; skip it if you need English only.
 
 ## 1. Solution
@@ -191,6 +192,19 @@ Constraints:
 - index: <nobr>`invoice_id`</nobr>
 - index: <nobr>`item_id`</nobr>
 
+**<nobr>`inv_invoice_snapshots`</nobr>** — snapshots of open cards for the draft (step 9), comment "Saved state of an invoice
+open in its card; state NULL — created in the card". The key is <nobr>`invoice_id`</nobr> itself; delete the <nobr>`id`</nobr> column:
+
+| Name | Type | Required | Default | Comment |
+|---|---|---|---|---|
+| <nobr>`invoice_id`</nobr> | <nobr>`bigint`</nobr> | ✓ |  | Invoice |
+| <nobr>`state`</nobr> | <nobr>`jsonb`</nobr> |  |  | Header and lines when the card was opened; NULL — a new invoice |
+| <nobr>`created_at`</nobr> | <nobr>`timestamptz`</nobr> | ✓ | <nobr>`now()`</nobr> |  |
+
+Constraints:
+
+- foreign key: <nobr>`invoice_id → inv_invoices(id) ON DELETE CASCADE`</nobr>
+
 The foreign key from lines to the invoice is <nobr>`ON DELETE CASCADE`</nobr>: a deleted draft takes its lines with it. The key to
 the item is <nobr>`RESTRICT`</nobr>: an item used in an invoice cannot be deleted. Price and VAT rate are stored in the line rather
 than taken from the catalogue — changing an item's price does not change invoices already issued.
@@ -252,7 +266,8 @@ SELECT v.id, v.number, v.invoice_date, to_char(v.invoice_date, 'DD.MM.YYYY') AS 
        END AS status_badge,
        COALESCE(t.lines, 0) AS lines, COALESCE(t.amount, 0) AS amount,
        COALESCE(t.vat, 0) AS vat, COALESCE(t.total, 0) AS total,
-       lower(concat_ws(' ', v.number, c.name)) AS search_text
+       lower(concat_ws(' ', v.number, c.name)) AS search_text,
+       EXISTS (SELECT 1 FROM inv_invoice_snapshots s WHERE s.invoice_id = v.id AND s.state IS NULL) AS is_new
 FROM inv_invoices v
 JOIN inv_customers c ON c.id = v.customer_id
 LEFT JOIN (SELECT invoice_id, count(*) AS lines, sum(amount) AS amount, sum(vat) AS vat, sum(total) AS total
@@ -313,6 +328,29 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
+-- The card draft: the whole invoice (header and lines) — a snapshot on opening, compared on closing
+CREATE OR REPLACE FUNCTION inv_invoice_state(p_id BIGINT) RETURNS JSONB AS $$
+    SELECT jsonb_build_object(
+        'invoice', to_jsonb(i) - 'created_at',
+        'lines', COALESCE((SELECT jsonb_agg(to_jsonb(l) ORDER BY l.id)
+                           FROM inv_invoice_lines l WHERE l.invoice_id = i.id), '[]'::JSONB))
+    FROM inv_invoices i WHERE i.id = p_id;
+$$ LANGUAGE sql STABLE;
+
+-- Return an invoice to its snapshot: header and lines
+CREATE OR REPLACE FUNCTION inv_invoice_restore(p_id BIGINT, p_state JSONB) RETURNS VOID AS $$
+BEGIN
+    UPDATE inv_invoices i
+    SET invoice_date = s.invoice_date, due_date = s.due_date, customer_id = s.customer_id,
+        status = s.status, notes = s.notes
+    FROM jsonb_populate_record(NULL::inv_invoices, p_state->'invoice') s
+    WHERE i.id = p_id;
+    DELETE FROM inv_invoice_lines WHERE invoice_id = p_id;
+    INSERT INTO inv_invoice_lines
+    SELECT * FROM jsonb_populate_recordset(NULL::inv_invoice_lines, p_state->'lines');
+END;
+$$ LANGUAGE plpgsql;
+
 -- Save the invoice header from the card fields; a new invoice gets a number. Returns the id
 CREATE OR REPLACE FUNCTION inv_invoice_upsert(p_data JSON) RETURNS BIGINT AS $$
 DECLARE
@@ -331,6 +369,8 @@ BEGIN
         INSERT INTO inv_invoices (id, number, invoice_date, due_date, customer_id, notes, created_by)
         VALUES (v_id, format('INV-%s-%s', to_char(v_date, 'YYYY'), lpad(v_id::TEXT, 5, '0')),
                 v_date, v_due, v_customer, v_notes, ui_user());
+        -- The invoice is created in the card: a snapshot without state — closing without "Save" deletes it
+        INSERT INTO inv_invoice_snapshots (invoice_id, state) VALUES (v_id, NULL);
     ELSE
         PERFORM inv_invoice_require_draft(v_id);
         UPDATE inv_invoices SET invoice_date = v_date, due_date = v_due, customer_id = v_customer, notes = v_notes
@@ -574,7 +614,7 @@ drop-down list, the items of that list, opening a new and an existing invoice, d
 CREATE OR REPLACE FUNCTION inv_invoices_page(p_data JSON) RETURNS JSON AS $$
 SELECT ui_grid_page('inv_invoices_page', p_data, 'inv_invoices_v', NULL, 'date_text', 'desc',
                     p_search_column => 'search_text', p_search => lower(p_data->>'search'),
-                    p_filters => jsonb_build_object('status', p_data->>'status_filter'));
+                    p_filters => jsonb_build_object('status', p_data->>'status_filter', 'is_new', 'false'));
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION inv_statuses_combo(p_data JSON) RETURNS JSON AS $$
@@ -596,9 +636,14 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION inv_invoice_edit_open(p_data JSON) RETURNS JSON AS $$
 DECLARE
-    v_card JSONB := inv_invoice_card(ui_parse_id(p_data->>'id'));
+    v_id   BIGINT := ui_parse_id(p_data->>'id');
+    v_card JSONB  := inv_invoice_card(v_id);
 BEGIN
     PERFORM ui_require(v_card IS NOT NULL, 'Invoice not found — it may have been deleted');
+    -- Remember the saved version: closing without "Save" returns to it. The snapshot is overwritten —
+    -- one left by a window closed together with its browser tab would take the invoice back in time
+    INSERT INTO inv_invoice_snapshots (invoice_id, state) VALUES (v_id, inv_invoice_state(v_id))
+    ON CONFLICT (invoice_id) DO UPDATE SET state = EXCLUDED.state, created_at = now();
     RETURN ui_ok(ui_open_form('inv_invoice', p_title => format(ui_t('Invoice %s'), v_card->>'number'), p_data => v_card));
 END;
 $$ LANGUAGE plpgsql;
@@ -628,7 +673,7 @@ INSERT INTO pgerp.ui_actions (action_name, function_name, description) VALUES
 ON CONFLICT (action_name) DO NOTHING;
 ```
 
-The default sorting is the <nobr>`'date_text'`</nobr> argument: it is a **table column field** with sorting set (step 9), not a
+The default sorting is the <nobr>`'date_text'`</nobr> argument: it is a **table column field** with sorting set (step 11), not a
 view column; an unknown field is silently replaced by <nobr>`id`</nobr>.
 
 Form <nobr>`inv_invoices`</nobr> — "Invoices". The drop-down list's "Empty item" is "All": with nothing chosen
@@ -652,6 +697,7 @@ CREATE OR REPLACE FUNCTION inv_invoice_save(p_data JSON) RETURNS JSON AS $$
 DECLARE
     v_id BIGINT := inv_invoice_upsert(p_data);
 BEGIN
+    DELETE FROM inv_invoice_snapshots WHERE invoice_id = v_id;   -- the changes are accepted
     RETURN ui_ok(ui_close_form(), ui_refresh_grid('inv_invoices_grid', p_keep_page => TRUE),
                  ui_message(format(ui_t('Invoice %s saved'), (SELECT number FROM inv_invoices WHERE id = v_id))));
 END;
@@ -664,6 +710,7 @@ BEGIN
     PERFORM ui_require(EXISTS (SELECT 1 FROM inv_invoice_lines WHERE invoice_id = v_id),
                        'Add at least one line before issuing the invoice');
     UPDATE inv_invoices SET status = 'issued' WHERE id = v_id;
+    DELETE FROM inv_invoice_snapshots WHERE invoice_id = v_id;
     PERFORM ui_print(format(ui_t('Invoice %s issued'), (SELECT number FROM inv_invoices WHERE id = v_id)));
     RETURN ui_ok(inv_invoice_changed(v_id));
 END;
@@ -675,6 +722,7 @@ DECLARE
 BEGIN
     UPDATE inv_invoices SET status = 'paid' WHERE id = v_id AND status = 'issued';
     PERFORM ui_require(FOUND, 'Only an issued invoice can be marked as paid');
+    DELETE FROM inv_invoice_snapshots WHERE invoice_id = v_id;
     RETURN ui_ok(inv_invoice_changed(v_id));
 END;
 $$ LANGUAGE plpgsql;
@@ -683,13 +731,16 @@ CREATE OR REPLACE FUNCTION inv_invoice_void(p_data JSON) RETURNS JSON AS $$
 DECLARE
     v_id BIGINT := ui_parse_id(p_data->>'id');
 BEGIN
-    PERFORM ui_require(v_id IS NOT NULL, 'The invoice is not saved yet — just close it');
+    PERFORM ui_require(v_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM inv_invoice_snapshots
+                                                        WHERE invoice_id = v_id AND state IS NULL),
+                       'The invoice is not saved yet — just close it');
     IF NOT ui_confirmed(p_data) THEN
         RETURN ui_ok(ui_confirm('Cancel this invoice? It cannot be changed afterwards.', 'inv_invoice_void',
                                 jsonb_build_object('id', v_id, 'confirmed', TRUE), p_confirm_label => 'Cancel invoice'));
     END IF;
     UPDATE inv_invoices SET status = 'cancelled' WHERE id = v_id AND status IN ('draft', 'issued');
     PERFORM ui_require(FOUND, 'Only a draft or an issued invoice can be cancelled');
+    DELETE FROM inv_invoice_snapshots WHERE invoice_id = v_id;
     RETURN ui_ok(inv_invoice_changed(v_id));
 END;
 $$ LANGUAGE plpgsql;
@@ -826,6 +877,9 @@ Form <nobr>`inv_invoice`</nobr> — "Invoice":
 | Button | <nobr>`btn_void`</nobr> | Cancel invoice | <nobr>`inv_invoice_void`</nobr> |  |
 | Button | <nobr>`btn_close`</nobr> | Close | <nobr>`form_close`</nobr> |  |
 
+For now "Close" just closes the window (<nobr>`form_close`</nobr>): in step 9 it becomes closing the draft,
+and in step 10 "Print" appears next to it. The screenshot below shows the finished form.
+
 The key part is the <nobr>`inv_lines_grid`</nobr> table property **"Master" = <nobr>`id`</nobr>**: the lines table became the card's
 details. Fields with the same "Column" number are stacked, columns stand side by side; components with the "Tab" Lines are
 gathered on a tab. The total has no column: columns are laid out across the whole form, and a total with a column would
@@ -859,7 +913,321 @@ to. The <nobr>`item_id`</nobr> lookup field stores the item's <nobr>`id`</nobr> 
 
 ![Invoice line in the editor](img/invoices/en/08-form-line.png)
 
-## 9. Table columns
+## 9. Draft: closing without saving
+
+"Add line" writes a new invoice to the database — otherwise lines have nothing to link to, and every line is saved at
+once too. Without a draft, an invoice with lines would stay in the database even if the card is closed without "Save".
+The card draft rests on a **snapshot** — the <nobr>`inv_invoice_snapshots`</nobr> table from step 2:
+
+- opening a saved invoice (<nobr>`inv_invoice_edit_open`</nobr>) remembers it whole — header and lines
+  (<nobr>`inv_invoice_state`</nobr>);
+- a new invoice created by "Add line" (<nobr>`inv_invoice_upsert`</nobr>) is marked by a snapshot without state;
+  the list does not show such invoices — the <nobr>`is_new`</nobr> view column and the filter in <nobr>`inv_invoices_page`</nobr>;
+- "Save", "Issue", "Paid", "Cancel invoice" accept the changes — the snapshot is deleted;
+- "Close", the close cross and Escape call <nobr>`inv_invoice_cancel`</nobr>: if something changed it asks first, and on
+  consent deletes a new invoice with its lines or returns a saved one to its snapshot (<nobr>`inv_invoice_restore`</nobr>).
+
+Everything except closing itself is already in the code of steps 4, 6 and 7. What is left is the closing action —
+**SQL console**:
+
+```sql
+-- Close the card without saving: delete a new invoice or return a saved one to its snapshot
+
+CREATE OR REPLACE FUNCTION inv_invoice_cancel(p_data JSON) RETURNS JSON AS $$
+-- "Close", the close cross and Escape. If something changed — a question first; on consent an invoice created
+-- in the card is deleted with its lines, and a saved one returns to its snapshot. The header comes from the form:
+-- its edits may not be written yet
+DECLARE
+    v_id       BIGINT := ui_parse_id(p_data->>'id');
+    v_invoice  inv_invoices%ROWTYPE;
+    v_snapshot inv_invoice_snapshots%ROWTYPE;
+    v_new      BOOLEAN;
+    v_close    JSONB := jsonb_build_array(ui_close_form(), ui_refresh_grid('inv_invoices_grid', p_keep_page => TRUE));
+BEGIN
+    -- The invoice has not been written yet (no lines added): ask only if a customer is chosen
+    IF v_id IS NULL THEN
+        IF NOT ui_confirmed(p_data) AND ui_parse_id(p_data->>'customer_id') IS NOT NULL THEN
+            RETURN ui_ok(ui_confirm('Close without saving? The new invoice will not be created.',
+                                    'inv_invoice_cancel', jsonb_build_object('confirmed', TRUE),
+                                    p_confirm_label => 'Don''t save'));
+        END IF;
+        RETURN ui_ok(ui_close_form());
+    END IF;
+
+    SELECT * INTO v_invoice FROM inv_invoices WHERE id = v_id;
+    IF NOT FOUND THEN
+        RETURN ui_ok(v_close);   -- already deleted: nothing to undo
+    END IF;
+    SELECT * INTO v_snapshot FROM inv_invoice_snapshots WHERE invoice_id = v_id;
+    v_new := v_snapshot.invoice_id IS NOT NULL AND v_snapshot.state IS NULL;
+
+    IF NOT ui_confirmed(p_data) THEN
+        IF v_new
+           OR (v_snapshot.state IS NOT NULL AND v_snapshot.state IS DISTINCT FROM inv_invoice_state(v_id))
+           OR (v_invoice.status = 'draft' AND
+               jsonb_build_object('invoice_date', v_invoice.invoice_date, 'due_date', v_invoice.due_date,
+                                  'customer_id', v_invoice.customer_id, 'notes', v_invoice.notes)
+               IS DISTINCT FROM
+               jsonb_build_object('invoice_date', ui_parse_date(p_data->>'invoice_date'),
+                                  'due_date', ui_parse_date(p_data->>'due_date'),
+                                  'customer_id', ui_parse_id(p_data->>'customer_id'), 'notes', ui_text(p_data, 'notes'))) THEN
+            RETURN ui_ok(ui_confirm(
+                format(CASE WHEN v_new THEN ui_t('Close without saving? Invoice %s with its lines will be deleted.')
+                            ELSE ui_t('Close without saving? Changes to invoice %s will be discarded.') END,
+                       v_invoice.number),
+                'inv_invoice_cancel', jsonb_build_object('id', v_id::TEXT, 'confirmed', TRUE),
+                p_confirm_label => 'Don''t save'));
+        END IF;
+        -- Nothing changed: nothing to return
+        DELETE FROM inv_invoice_snapshots WHERE invoice_id = v_id;
+        RETURN ui_ok(ui_close_form());
+    END IF;
+
+    IF v_new THEN
+        DELETE FROM inv_invoices WHERE id = v_id;   -- lines and the snapshot are deleted by cascade
+    ELSIF v_snapshot.state IS NOT NULL THEN
+        PERFORM inv_invoice_restore(v_id, v_snapshot.state);
+        DELETE FROM inv_invoice_snapshots WHERE invoice_id = v_id;
+    END IF;
+    RETURN ui_ok(v_close);
+END;
+$$ LANGUAGE plpgsql;
+
+INSERT INTO pgerp.ui_actions (action_name, function_name, description) VALUES
+    ('inv_invoice_cancel', 'inv_invoice_cancel', 'Invoices: close the invoice card')
+ON CONFLICT (action_name) DO NOTHING;
+
+-- The close cross and Escape close the card with the same action as the "Close" button
+UPDATE pgerp.forms SET cancel_action = 'inv_invoice_cancel' WHERE form_name = 'inv_invoice';
+```
+
+In the form editor choose the <nobr>`inv_invoice_cancel`</nobr> action for the <nobr>`btn_close`</nobr> button of the
+<nobr>`inv_invoice`</nobr> card. The last line of the script does the same for the close cross and Escape: it is the form's
+cancel action (<nobr>`pgerp.forms.cancel_action`</nobr>), which the editor does not have — only SQL or MCP.
+
+![Closing without saving](img/invoices/en/19-app-close-confirm.png)
+
+> Why a snapshot rather than a transaction: every click is a separate database request, a transaction does not live
+> between them. A snapshot left by a tab closed together with the browser is overwritten by the next opening of the
+> invoice. New invoices abandoned the same way are not shown in the list; delete them with
+> <nobr>`DELETE FROM inv_invoices WHERE id IN (SELECT invoice_id FROM inv_invoice_snapshots WHERE state IS NULL AND created_at < now() - interval '1 day')`</nobr>.
+
+## 10. Printing an invoice
+
+A PDF report is a jrxml template (JasperReports) and a **data function**: it returns JSON whose top-level keys are the
+template parameters <nobr>`$P{...}`</nobr> and whose <nobr>`rows`</nobr> array holds the rows <nobr>`$F{...}`</nobr>. The
+<nobr>`ui_report(report, parameters, title)`</nobr> instruction from any action shows the report. The button code and the data
+function — **SQL console**:
+
+```sql
+-- Printing an invoice: the button and the data function of report inv_invoice
+
+CREATE OR REPLACE FUNCTION inv_invoice_print(p_data JSON) RETURNS JSON AS $$
+-- "Print": from the card the draft header is written first, from a list row only the id comes
+DECLARE
+    v_id     BIGINT := ui_parse_id(p_data->>'id');
+    v_number TEXT;
+BEGIN
+    IF p_data->>'invoice_date' IS NOT NULL
+       AND (v_id IS NULL OR (SELECT status FROM inv_invoices WHERE id = v_id) = 'draft') THEN
+        v_id := inv_invoice_upsert(p_data);
+    END IF;
+    SELECT number INTO v_number FROM inv_invoices WHERE id = v_id;
+    PERFORM ui_require(FOUND, 'Invoice not found — it may have been deleted');
+    PERFORM ui_require(EXISTS (SELECT 1 FROM inv_invoice_lines WHERE invoice_id = v_id),
+                       'Add at least one line before printing the invoice');
+    RETURN ui_ok(ui_report('inv_invoice', jsonb_build_object('invoice_id', v_id), format(ui_t('Invoice %s'), v_number)));
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION inv_invoice_print_data(p_data JSON) RETURNS JSON AS $$
+-- Data of report inv_invoice: top-level keys are parameters $P{...}, rows are the rows $F{...}
+DECLARE
+    v_invoice  inv_invoices_v%ROWTYPE;
+    v_customer inv_customers%ROWTYPE;
+BEGIN
+    SELECT * INTO v_invoice FROM inv_invoices_v WHERE id = ui_parse_id(p_data->>'invoice_id');
+    PERFORM ui_require(FOUND, 'Invoice not found — it may have been deleted');
+    SELECT * INTO v_customer FROM inv_customers WHERE id = v_invoice.customer_id;
+    RETURN json_build_object(
+        'title', format(ui_t('Invoice %s'), v_invoice.number),
+        'invoice_date', v_invoice.invoice_date,
+        'due_date', v_invoice.due_date,
+        'status', v_invoice.status_badge->>'label',
+        'customer', v_customer.name,
+        'customer_details', concat_ws(' · ', CASE WHEN v_customer.tax_id IS NOT NULL THEN format(ui_t('Tax ID %s'), v_customer.tax_id) END,
+                                      v_customer.address, v_customer.email),
+        'notes', v_invoice.notes,
+        'amount', v_invoice.amount, 'vat', v_invoice.vat, 'total', v_invoice.total,
+        'rows', COALESCE((
+            SELECT json_agg(json_build_object(
+                       'line_no', n, 'item', item, 'unit', unit, 'quantity', quantity, 'price', price,
+                       'amount', amount, 'vat_rate', vat_rate, 'total', total) ORDER BY n)
+            FROM (SELECT row_number() OVER (ORDER BY id) AS n, * FROM inv_invoice_lines_v
+                  WHERE invoice_id = v_invoice.id) l), '[]'));
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+INSERT INTO pgerp.ui_actions (action_name, function_name, description) VALUES
+    ('inv_invoice_print',      'inv_invoice_print',      'Invoices: print invoice (PDF)'),
+    ('inv_invoice_print_data', 'inv_invoice_print_data', 'Invoices: invoice report data')
+ON CONFLICT (action_name) DO NOTHING;
+```
+
+<nobr>`inv_invoice_print`</nobr> works both from the card (it writes the draft header first) and from a list row (only the
+<nobr>`id`</nobr> comes). The data function need not be granted in a role: the report opens from an action the user already
+has the right to.
+
+**Reports → "+ New report"**: name <nobr>`inv_invoice`</nobr>, title "Invoice", data — <nobr>`inv_invoice_print_data`</nobr>,
+preview parameters <nobr>`{"invoice_id": 1}`</nobr>, the template — below. "Preview" builds the PDF right in the editor,
+"Save" compiles the template and stores the report.
+
+<details>
+<summary>Template of report <code>inv_invoice</code> (jrxml)</summary>
+
+```xml
+<jasperReport name="inv_invoice" pageWidth="595" pageHeight="842" columnWidth="515" leftMargin="40" rightMargin="40" topMargin="40" bottomMargin="30">
+	<!-- Invoice: parameters come from inv_invoice_print_data, rows are the invoice lines -->
+	<parameter name="title" class="java.lang.String"/>
+	<parameter name="invoice_date" class="java.util.Date"/>
+	<parameter name="due_date" class="java.util.Date"/>
+	<parameter name="status" class="java.lang.String"/>
+	<parameter name="customer" class="java.lang.String"/>
+	<parameter name="customer_details" class="java.lang.String"/>
+	<parameter name="notes" class="java.lang.String"/>
+	<parameter name="amount" class="java.math.BigDecimal"/>
+	<parameter name="vat" class="java.math.BigDecimal"/>
+	<parameter name="total" class="java.math.BigDecimal"/>
+	<field name="line_no" class="java.lang.Integer"/>
+	<field name="item" class="java.lang.String"/>
+	<field name="unit" class="java.lang.String"/>
+	<field name="quantity" class="java.math.BigDecimal"/>
+	<field name="price" class="java.math.BigDecimal"/>
+	<field name="amount" class="java.math.BigDecimal"/>
+	<field name="vat_rate" class="java.math.BigDecimal"/>
+	<field name="total" class="java.math.BigDecimal"/>
+	<title height="120">
+		<element kind="rectangle" x="0" y="0" width="515" height="4" mode="Opaque" backcolor="#0969DA">
+			<pen lineWidth="0.0"/>
+		</element>
+		<element kind="textField" x="0" y="14" width="380" height="30" fontSize="20.0" bold="true">
+			<expression><![CDATA[$P{title}]]></expression>
+		</element>
+		<element kind="textField" x="380" y="20" width="135" height="20" hTextAlign="Right" forecolor="#59636E">
+			<expression><![CDATA[$P{status}]]></expression>
+		</element>
+		<element kind="textField" x="0" y="44" width="515" height="18" forecolor="#59636E">
+			<expression><![CDATA[$R{dated} + " " + new java.text.SimpleDateFormat("dd.MM.yyyy").format($P{invoice_date})
+				+ ($P{due_date} == null ? "" : " · " + $R{Pay by} + " " + new java.text.SimpleDateFormat("dd.MM.yyyy").format($P{due_date}))]]></expression>
+		</element>
+		<element kind="textField" x="0" y="72" width="90" height="18" forecolor="#59636E">
+			<expression><![CDATA[$R{Customer}]]></expression>
+		</element>
+		<element kind="textField" x="90" y="72" width="425" height="18" bold="true">
+			<expression><![CDATA[$P{customer}]]></expression>
+		</element>
+		<element kind="textField" x="90" y="90" width="425" height="16" fontSize="8.0" forecolor="#59636E" textAdjust="StretchHeight">
+			<expression><![CDATA[$P{customer_details}]]></expression>
+		</element>
+	</title>
+	<columnHeader height="24">
+		<element kind="frame" x="0" y="0" width="515" height="22" mode="Opaque" backcolor="#F6F8FA">
+			<element kind="textField" x="4" y="0" width="24" height="22" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA["№"]]></expression>
+			</element>
+			<element kind="textField" x="28" y="0" width="165" height="22" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Goods or service}]]></expression>
+			</element>
+			<element kind="textField" x="193" y="0" width="65" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Qty}]]></expression>
+			</element>
+			<element kind="textField" x="258" y="0" width="70" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Price}]]></expression>
+			</element>
+			<element kind="textField" x="328" y="0" width="75" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Amount}]]></expression>
+			</element>
+			<element kind="textField" x="403" y="0" width="45" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{VAT, %}]]></expression>
+			</element>
+			<element kind="textField" x="448" y="0" width="63" height="22" hTextAlign="Right" vTextAlign="Middle" bold="true" fontSize="9.0">
+				<expression><![CDATA[$R{Total}]]></expression>
+			</element>
+		</element>
+	</columnHeader>
+	<detail>
+		<band height="22">
+			<element kind="textField" x="4" y="2" width="24" height="18" fontSize="9.0">
+				<expression><![CDATA[$F{line_no}]]></expression>
+			</element>
+			<element kind="textField" x="28" y="2" width="165" height="18" fontSize="9.0" textAdjust="StretchHeight">
+				<expression><![CDATA[$F{item}]]></expression>
+			</element>
+			<element kind="textField" x="193" y="2" width="65" height="18" hTextAlign="Right" fontSize="9.0">
+				<expression><![CDATA[new java.text.DecimalFormat("#,##0.###", java.text.DecimalFormatSymbols.getInstance($P{REPORT_LOCALE})).format($F{quantity}) + " " + $F{unit}]]></expression>
+			</element>
+			<element kind="textField" x="258" y="2" width="70" height="18" hTextAlign="Right" fontSize="9.0" pattern="#,##0.00">
+				<expression><![CDATA[$F{price}]]></expression>
+			</element>
+			<element kind="textField" x="328" y="2" width="75" height="18" hTextAlign="Right" fontSize="9.0" pattern="#,##0.00">
+				<expression><![CDATA[$F{amount}]]></expression>
+			</element>
+			<element kind="textField" x="403" y="2" width="45" height="18" hTextAlign="Right" fontSize="9.0">
+				<expression><![CDATA[new java.text.DecimalFormat("#,##0.##", java.text.DecimalFormatSymbols.getInstance($P{REPORT_LOCALE})).format($F{vat_rate})]]></expression>
+			</element>
+			<element kind="textField" x="448" y="2" width="63" height="18" hTextAlign="Right" fontSize="9.0" pattern="#,##0.00">
+				<expression><![CDATA[$F{total}]]></expression>
+			</element>
+			<element kind="line" x="0" y="21" width="515" height="1" forecolor="#EFF2F5"/>
+		</band>
+	</detail>
+	<pageFooter height="20">
+		<element kind="textField" x="0" y="0" width="315" height="20" forecolor="#59636E" fontSize="8.0">
+			<expression><![CDATA[$P{title} + " · " + $P{customer}]]></expression>
+		</element>
+		<element kind="textField" x="315" y="0" width="200" height="20" hTextAlign="Right" forecolor="#59636E" fontSize="8.0">
+			<expression><![CDATA[$R{Page} + " " + $V{PAGE_NUMBER}]]></expression>
+		</element>
+	</pageFooter>
+	<summary height="110">
+		<element kind="textField" x="195" y="10" width="195" height="18" hTextAlign="Right">
+			<expression><![CDATA[$R{Amount without VAT}]]></expression>
+		</element>
+		<element kind="textField" x="395" y="10" width="116" height="18" hTextAlign="Right" pattern="#,##0.00">
+			<expression><![CDATA[$P{amount}]]></expression>
+		</element>
+		<element kind="textField" x="195" y="28" width="195" height="18" hTextAlign="Right">
+			<expression><![CDATA[$R{VAT}]]></expression>
+		</element>
+		<element kind="textField" x="395" y="28" width="116" height="18" hTextAlign="Right" pattern="#,##0.00">
+			<expression><![CDATA[$P{vat}]]></expression>
+		</element>
+		<element kind="textField" x="195" y="48" width="195" height="22" hTextAlign="Right" bold="true" fontSize="12.0">
+			<expression><![CDATA[$R{Total due}]]></expression>
+		</element>
+		<element kind="textField" x="395" y="48" width="116" height="22" hTextAlign="Right" bold="true" fontSize="12.0" pattern="#,##0.00">
+			<expression><![CDATA[$P{total}]]></expression>
+		</element>
+		<element kind="textField" x="0" y="80" width="515" height="26" fontSize="9.0" forecolor="#59636E" textAdjust="StretchHeight">
+			<expression><![CDATA[$P{notes} == null ? "" : $R{Notes} + ": " + $P{notes}]]></expression>
+		</element>
+	</summary>
+</jasperReport>
+```
+
+</details>
+
+![The report in the editor](img/invoices/en/20-report-editor.png)
+
+<nobr>`$R{text}`</nobr> in the template is the text translated into the user's language: such texts appear in the
+"Translations" form (step 15). Numbers with a <nobr>`pattern`</nobr> are formatted for the user's language.
+
+What is left is the button: in the <nobr>`inv_invoice`</nobr> card add a <nobr>`btn_print`</nobr> "Print" button before "Close" with
+the <nobr>`inv_invoice_print`</nobr> action. The "Print" button in list rows comes in step 12.
+
+![The invoice as PDF](img/invoices/en/21-app-print.png)
+
+## 11. Table columns
 
 Select a table in the form and click **"Columns…"**. Columns belong to the source and are the same in every form using it.
 
@@ -906,7 +1274,7 @@ Select a table in the form and click **"Columns…"**. Columns belong to the sou
 | <nobr>`tax_id`</nobr> | Tax ID | Text |  |
 | <nobr>`email`</nobr> | E-mail | Text |  |
 
-## 10. Row buttons
+## 12. Row buttons
 
 Row buttons are set for a table source in <nobr>`pgerp.grid_row_actions`</nobr> — **SQL console → "Run"**:
 
@@ -917,21 +1285,22 @@ INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label
     ('inv_items_page',     2, 'inv_item_delete',        'Delete', 'danger'),
     ('inv_customers_page', 1, 'inv_customer_edit_open', 'Edit',   'default'),
     ('inv_invoices_page',  1, 'inv_invoice_edit_open',  'Open',   'default'),
-    ('inv_invoices_page',  2, 'inv_invoice_delete',     'Delete', 'danger'),
+    ('inv_invoices_page',  2, 'inv_invoice_print',      'Print',  'default'),
+    ('inv_invoices_page',  3, 'inv_invoice_delete',     'Delete', 'danger'),
     ('inv_lines_page',     1, 'inv_line_edit_open',     'Edit',   'default'),
     ('inv_lines_page',     2, 'inv_line_delete',        'Remove', 'danger');
 ```
 
 ![Row buttons in the console](img/invoices/en/09-console-row-actions.png)
 
-## 11. Menu
+## 13. Menu
 
 **Menu → "+ Item"** "Invoices" (a folder) and three **"+ Subitem"**: "Invoices" — form <nobr>`inv_invoices`</nobr>, "Customers" —
 <nobr>`inv_customers`</nobr>, "Goods and services" — <nobr>`inv_items`</nobr>. "Save".
 
 ![Menu](img/invoices/en/10-menu.png)
 
-## 12. Permissions
+## 14. Permissions
 
 In the application: **Administration → Roles → "New role"**: code <nobr>`inv_accountant`</nobr>, title "Invoices: accountant";
 add the forms <nobr>`inv_invoices`</nobr>, <nobr>`inv_customers`</nobr>, <nobr>`inv_items`</nobr>. Cards, the invoice line and selection windows need not
@@ -940,7 +1309,7 @@ be granted: they open from granted forms and are available automatically. Assign
 
 ![Accountant role](img/invoices/en/12-role.png)
 
-## 13. Translations
+## 15. Translations
 
 Translations of the source texts make the interface Russian for users who choose Russian. The key is the source text;
 templates with <nobr>`%s`</nobr> are translated as templates. Enter them one by one in **Administration → Translations**, or with one
@@ -1023,7 +1392,19 @@ INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Invoice not found — it may have been deleted',  'Счёт не найден — возможно, его удалили'),
     ('ru', 'Customer not found — it may have been deleted', 'Покупатель не найден — возможно, его удалили'),
     ('ru', 'Line not found — it may have been deleted',     'Строка не найдена — возможно, её удалили'),
-    ('ru', 'Not found — it may have been deleted',          'Не найдено — возможно, удалено')
+    ('ru', 'Not found — it may have been deleted',          'Не найдено — возможно, удалено'),
+    -- Черновик: закрытие без сохранения
+    ('ru', 'Don''t save',              'Не сохранять'),
+    ('ru', 'Close without saving? The new invoice will not be created.', 'Закрыть без сохранения? Новый счёт не будет создан.'),
+    ('ru', 'Close without saving? Invoice %s with its lines will be deleted.', 'Закрыть без сохранения? Счёт %s со строками будет удалён.'),
+    ('ru', 'Close without saving? Changes to invoice %s will be discarded.', 'Закрыть без сохранения? Изменения счёта %s будут отменены.'),
+    -- Печать
+    ('ru', 'Print',                    'Печать'),
+    ('ru', 'Add at least one line before printing the invoice', 'Добавьте в счёт хотя бы одну строку, чтобы его напечатать'),
+    ('ru', 'Tax ID %s',                'ИНН %s'),
+    ('ru', 'dated',                    'от'),
+    ('ru', 'Total due',                'Итого к оплате'),
+    ('ru', 'Page',                     'Стр.')
 ON CONFLICT (lang, source) DO NOTHING;
 -- …and the card total template
 INSERT INTO pgerp.translations (lang, source, translation) VALUES
@@ -1035,7 +1416,7 @@ To check nothing is missed: the "Translations" form, "Untranslated" tab — or t
 <nobr>`missing: true`</nobr>. Action descriptions ("Invoices: add a line") are shown only in the editor, translating them is optional.
 Translations of the solution's texts go into the release.
 
-## 14. Working in the application
+## 16. Working in the application
 
 Sign in as a user with the <nobr>`inv_accountant`</nobr> role. Add customers, goods and services — then **Invoices →
 "New invoice"**. The "Overdue" status comes from the view: an issued invoice past its payment date.
@@ -1062,17 +1443,17 @@ changed"; next come "Paid" or "Cancel invoice".
 
 ![Invoice issued](img/invoices/en/18-app-issued.png)
 
-## 15. Testing without the interface
+## 17. Testing without the interface
 
 **SQL console → "Action test"** calls an action with field values on behalf of the chosen user, rolled back by default.
 For example, <nobr>`inv_line_save`</nobr> on behalf of the accountant with <nobr>`{"invoice_id": "1", "item_id": "1", "quantity": "0",
 "price": "1", "vat_rate": "20"}`</nobr> returns the error "Quantity must be a number greater than zero", and for an issued
 invoice — "Only a draft invoice can be changed".
 
-## 16. Release
+## 18. Release
 
 **Solutions → Invoices**: a release name, "Check changes" — the list of everything the first release carries: tables,
-functions, views, forms, columns and row buttons, the role, the menu, translations.
+functions, views, forms, columns and row buttons, the report, the role, the menu, translations.
 
 ![Release preview](img/invoices/en/11-release-preview.png)
 
@@ -1098,15 +1479,17 @@ The guide's steps and the tools the agent uses for them:
 | 1. Solution | <nobr>`solution_save`</nobr> |
 | 2. Tables | <nobr>`table_save`</nobr>: first <nobr>`apply: false`</nobr> — show the SQL, then <nobr>`apply: true`</nobr> |
 | 3. Views | <nobr>`view_save`</nobr> |
-| 4, 6, 7. Code | <nobr>`sql_run`</nobr> — the same scripts, or <nobr>`function_save`</nobr> — one action at a time |
+| 4, 6, 7, 9, 10. Code | <nobr>`sql_run`</nobr> — the same scripts, or <nobr>`function_save`</nobr> — one action at a time |
 | 5–8. Forms | <nobr>`form_save`</nobr> — the whole form; the details table property — <nobr>`"master": "id"`</nobr> |
-| 9. Columns | <nobr>`grid_columns_save`</nobr> |
-| 10. Row buttons | <nobr>`sql_run`</nobr> |
-| 11. Menu | <nobr>`menu_get`</nobr>, then <nobr>`menu_save`</nobr> — the **whole** menu with the new folder |
-| 12. Permissions | <nobr>`role_set`</nobr> |
-| 13. Translations | <nobr>`translation_save`</nobr> or a script via <nobr>`sql_run`</nobr>; check — <nobr>`translation_list`</nobr> with <nobr>`missing: true`</nobr> |
-| 14–15. Testing | <nobr>`action_run`</nobr> with <nobr>`user`</nobr> — on behalf of the accountant, rolled back |
-| 16. Release | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — when you ask for it |
+| 9. Draft | <nobr>`sql_run`</nobr> — the closing action and <nobr>`cancel_action`</nobr>; <nobr>`form_save`</nobr> — the "Close" button |
+| 10. Printing | <nobr>`sql_run`</nobr> or <nobr>`function_save`</nobr>; <nobr>`report_save`</nobr> — the template and the data function; <nobr>`form_save`</nobr> — the "Print" button |
+| 11. Columns | <nobr>`grid_columns_save`</nobr> |
+| 12. Row buttons | <nobr>`sql_run`</nobr> |
+| 13. Menu | <nobr>`menu_get`</nobr>, then <nobr>`menu_save`</nobr> — the **whole** menu with the new folder |
+| 14. Permissions | <nobr>`role_set`</nobr> |
+| 15. Translations | <nobr>`translation_save`</nobr> or a script via <nobr>`sql_run`</nobr>; check — <nobr>`translation_list`</nobr> with <nobr>`missing: true`</nobr> |
+| 16–17. Testing | <nobr>`action_run`</nobr> with <nobr>`user`</nobr> — on behalf of the accountant, rolled back |
+| 18. Release | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — when you ask for it |
 
 The agent starts with <nobr>`platform_guide`</nobr> and goes through the same steps with the tools <nobr>`solution_save`</nobr>, <nobr>`table_save`</nobr>,
 <nobr>`view_save`</nobr>, <nobr>`sql_run`</nobr>, <nobr>`function_save`</nobr>, <nobr>`form_save`</nobr>, <nobr>`grid_columns_save`</nobr>, <nobr>`menu_save`</nobr>,

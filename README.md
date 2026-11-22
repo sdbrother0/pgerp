@@ -28,7 +28,7 @@ from sources (in a clone of the repository) — `docker compose up -d --build`.
 Versions, release notes and the jar: [GitHub Releases](https://github.com/sdbrother0/pgerp/releases).
 
 Open http://localhost:8099 and sign in as **admin / admin** (the password must be changed at first sign-in). The
-administrator then chooses which solutions to install: CRM, billing (invoices with lines) and examples are included.
+administrator then chooses which solutions to install: CRM, billing (invoices with lines, a draft and PDF printing) and examples are included.
 
 The application is reachable from this computer only. To open it to the network, change the admin password first, then
 run `ERP_BIND=0.0.0.0 docker compose up -d` (or put `ERP_BIND=0.0.0.0` into `.env`).

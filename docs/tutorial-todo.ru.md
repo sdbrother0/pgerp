@@ -104,16 +104,17 @@ SELECT t.id,
        t.due_on,
        to_char(t.due_on, 'DD.MM.YYYY') AS due,
        t.done,
-       jsonb_build_object(
-           'code',  CASE WHEN t.done THEN 'done' WHEN t.due_on < current_date THEN 'overdue' ELSE 'new' END,
-           'label', CASE WHEN t.done THEN 'Сделано' WHEN t.due_on < current_date THEN 'Просрочено' ELSE 'В работе' END) AS state,
+       CASE WHEN t.done                 THEN ui_badge('Сделано', 'success')
+            WHEN t.due_on < current_date THEN ui_badge('Просрочено', 'danger')
+            ELSE ui_badge('В работе', 'accent') END AS state,
        lower(t.title) AS search_text
 FROM todo_tasks t
 WHERE t.owner_login = ui_user()
 ```
 
-Колонка <nobr>`state`</nobr> — значение для формата «Метка»: <nobr>`code`</nobr> выбирает цвет (<nobr>`done`</nobr> — зелёный, <nobr>`overdue`</nobr> — красный,
-<nobr>`new`</nobr> — синий), <nobr>`label`</nobr> — текст. «Сохранить» → «Применить».
+Колонка <nobr>`state`</nobr> — значение для формата «Метка»: <nobr>`ui_badge(текст, тон)`</nobr> — текст на языке пользователя и цвет
+(<nobr>`success`</nobr> — зелёный, <nobr>`danger`</nobr> — красный, <nobr>`accent`</nobr> — синий; ещё <nobr>`neutral`</nobr>, <nobr>`attention`</nobr>, <nobr>`done`</nobr>).
+«Сохранить» → «Применить».
 
 ![Представление](img/todo/ru/05-view.png)
 
@@ -202,12 +203,14 @@ END;
 
 ```sql
 -- Источник таблицы: страница задач текущего пользователя, поиск по названию, по умолчанию — по сроку.
-SELECT ui_grid_page('todo_tasks_page', p_data, 'todo_tasks_v', NULL, 'due_on', 'asc',
+SELECT ui_grid_page('todo_tasks_page', p_data, 'todo_tasks_v', NULL, 'due', 'asc',
                     p_search_column => 'search_text', p_search => lower(p_data->>'search'));
 ```
 
 <nobr>`ui_grid_page`</nobr> сам делает страницы, сортировку и поиск: получает <nobr>`page`</nobr>, <nobr>`limit`</nobr>, <nobr>`sort_field`</nobr> и значения полей формы
-(<nobr>`search`</nobr>), читает представление и отвечает строками с колонками и кнопками строк.
+(<nobr>`search`</nobr>), читает представление и отвечает строками с колонками и кнопками строк. Сортировка по умолчанию —
+**поле колонки таблицы** <nobr>`due`</nobr> с включённой сортировкой (ниже, «Колонки»), а не колонка представления: неизвестное поле
+<nobr>`ui_grid_page`</nobr> молча заменяет на <nobr>`id`</nobr>.
 
 ![Код источника](img/todo/ru/09-grid-source-code.png)
 
@@ -217,7 +220,7 @@ SELECT ui_grid_page('todo_tasks_page', p_data, 'todo_tasks_v', NULL, 'due_on', '
 | Поле | Заголовок | Формат | Сортировка |
 |---|---|---|---|
 | <nobr>`title`</nobr> | Что сделать | Текст | ✓ |
-| <nobr>`due`</nobr> | Срок | Текст | — по умолчанию строки и так идут по сроку |
+| <nobr>`due`</nobr> | Срок | Текст | ✓ — по дате <nobr>`due_on`</nobr>, см. шаг 7 |
 | <nobr>`state`</nobr> | Состояние | Метка | |
 
 ![Колонки таблицы](img/todo/ru/10-columns.png)
@@ -297,12 +300,19 @@ INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label
     ('todo_tasks_page', 1, 'todo_task_edit_open', 'Изменить', 'default'),
     ('todo_tasks_page', 2, 'todo_task_done',      'Сделано',  'default'),
     ('todo_tasks_page', 3, 'todo_task_delete',    'Удалить',  'danger');
+
+-- Срок показывается как ДД.ММ.ГГГГ, а сортироваться должен по дате: колонка таблицы due — по due_on
+UPDATE pgerp.grid_columns SET sort_column = 'due_on' WHERE action_name = 'todo_tasks_page' AND field_name = 'due';
 ```
 
 ![Скрипт в консоли](img/todo/ru/11-console-row-actions.png)
 
 Удаление — в два шага: первый вызов возвращает <nobr>`ui_confirm`</nobr> (окно «Удалить задачу …?»), при согласии браузер
 вызывает то же действие с <nobr>`"confirmed": true`</nobr>, и <nobr>`ui_confirmed(p_data)`</nobr> пропускает вопрос.
+
+Последняя строка скрипта — сортировка колонки «Срок». Галочка «Сортировка» в окне «Колонки» сортирует по самому полю,
+а <nobr>`due`</nobr> — текст «ДД.ММ.ГГГГ», и «04.12» встало бы раньше «28.11». Колонку, по которой сортировать на самом деле, задаёт
+<nobr>`pgerp.grid_columns.sort_column`</nobr> (через MCP — поле <nobr>`sort_column`</nobr> в <nobr>`grid_columns_save`</nobr>).
 
 > Обработчики действий (<nobr>`fn(p_data JSON) RETURNS JSON`</nobr>) после создания открываются и правятся кнопкой «{ }»
 > в редакторе форм; вспомогательные функции и триггеры — через SQL-консоль.
@@ -381,8 +391,10 @@ INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label
 (пользователь — администратор, начальный пароль должен быть сменён), затем в Claude Code:
 
 ```bash
-claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <токен>"
+claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <токен>"
 ```
+
+Порт 8099 — как в установке из [README](../README.ru.md); точный адрес вашей установки — на странице «Доступ MCP», в «Адресе сервера».
 
 и попросите словами, например:
 

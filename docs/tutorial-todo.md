@@ -104,16 +104,17 @@ SELECT t.id,
        t.due_on,
        to_char(t.due_on, 'YYYY-MM-DD') AS due,
        t.done,
-       jsonb_build_object(
-           'code',  CASE WHEN t.done THEN 'done' WHEN t.due_on < current_date THEN 'overdue' ELSE 'new' END,
-           'label', CASE WHEN t.done THEN 'Done' WHEN t.due_on < current_date THEN 'Overdue' ELSE 'In progress' END) AS state,
+       CASE WHEN t.done                 THEN ui_badge('Done', 'success')
+            WHEN t.due_on < current_date THEN ui_badge('Overdue', 'danger')
+            ELSE ui_badge('In progress', 'accent') END AS state,
        lower(t.title) AS search_text
 FROM todo_tasks t
 WHERE t.owner_login = ui_user()
 ```
 
-The <nobr>`state`</nobr> column is a value for the "Badge" format: <nobr>`code`</nobr> picks the colour (<nobr>`done`</nobr> — green, <nobr>`overdue`</nobr> — red,
-<nobr>`new`</nobr> — blue), <nobr>`label`</nobr> is the text. "Save" → "Apply".
+The <nobr>`state`</nobr> column is a value for the "Badge" format: <nobr>`ui_badge(text, tone)`</nobr> — the text in the user's language
+and the colour (<nobr>`success`</nobr> — green, <nobr>`danger`</nobr> — red, <nobr>`accent`</nobr> — blue; also <nobr>`neutral`</nobr>, <nobr>`attention`</nobr>, <nobr>`done`</nobr>).
+"Save" → "Apply".
 
 ![View](img/todo/en/05-view.png)
 
@@ -202,12 +203,14 @@ Name <nobr>`todo_tasks_page`</nobr>, language <nobr>`sql`</nobr>, volatility <no
 
 ```sql
 -- Table source: a page of the current user's tasks, search by title, ordered by due date by default.
-SELECT ui_grid_page('todo_tasks_page', p_data, 'todo_tasks_v', NULL, 'due_on', 'asc',
+SELECT ui_grid_page('todo_tasks_page', p_data, 'todo_tasks_v', NULL, 'due', 'asc',
                     p_search_column => 'search_text', p_search => lower(p_data->>'search'));
 ```
 
 <nobr>`ui_grid_page`</nobr> does paging, sorting and search by itself: it receives <nobr>`page`</nobr>, <nobr>`limit`</nobr>, <nobr>`sort_field`</nobr> and the form field
-values (<nobr>`search`</nobr>), reads the view and responds with rows, columns and row buttons.
+values (<nobr>`search`</nobr>), reads the view and responds with rows, columns and row buttons. The default sorting is a
+**table column field** with sorting on (<nobr>`due`</nobr>, see "Columns" below), not a view column: <nobr>`ui_grid_page`</nobr> silently
+replaces an unknown field with <nobr>`id`</nobr>.
 
 ![Source code](img/todo/en/09-grid-source-code.png)
 
@@ -380,8 +383,10 @@ Code is explained step by step in [the invoices guide, step 0](tutorial-invoices
 **MCP access → "Issue token"** (the user is an administrator whose initial password has been changed), then in Claude Code:
 
 ```bash
-claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http pgerp http://localhost:8099/mcp --header "Authorization: Bearer <token>"
 ```
+
+Port 8099 is the one from the [README](../README.md) installation; the exact address of your installation is on the "MCP access" page, under "Server address".
 
 and ask in plain words, for example:
 

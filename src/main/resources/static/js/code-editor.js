@@ -244,7 +244,7 @@ export function openFunctionEditor(fn, onSaved) {
 		renderSignature();
 	};
 	note.textContent = fn.is_new
-		? t('Template: the function is created in the public schema and becomes the component action.')
+		? t('Template: the function is created in the schema of its solution (by the name prefix; without a solution — public) and becomes the component action.')
 		: (fn.description ?? '');
 
 	const name = input(state.name, (v) => { state.name = v.trim(); touch(); });
@@ -263,7 +263,7 @@ export function openFunctionEditor(fn, onSaved) {
 	const signature = document.createElement('code');
 	signature.className = 'function-signature';
 	const renderSignature = () => {
-		signature.replaceChildren(highlightSql(`CREATE OR REPLACE FUNCTION public.${state.name || '…'}(${state.argument} JSON) `
+		signature.replaceChildren(highlightSql(`CREATE OR REPLACE FUNCTION ${state.name || '…'}(${state.argument} JSON) `
 			+ `RETURNS JSON LANGUAGE ${state.language} ${state.volatility} AS $$`));
 	};
 	renderSignature();
@@ -298,7 +298,7 @@ export function openFunctionEditor(fn, onSaved) {
 			});
 			state.is_new = false;
 			name.disabled = true;
-			title.textContent = `public.${result.action}(json)`;
+			title.textContent = `${result.action}(json)`;
 			note.textContent = state.description ?? '';
 			dirty = false;
 			status.textContent = t('Saved');
