@@ -80,14 +80,14 @@ means rows in the metadata and a PL/pgSQL function registered in `pgerp.ui_actio
 
 | Where | File |
 |---|---|
-| Sign-in, session, CSRF | <nobr>`src/main/java/com/erp/gateway/security/`</nobr> — <nobr>`SecurityConfig`</nobr>, <nobr>`DatabaseAuthenticationProvider`</nobr>, <nobr>`CsrfCookieFilter`</nobr> |
-| Action controller | `src/main/java/com/erp/gateway/web/UiEventController.java` |
-| Dispatcher | `src/main/java/com/erp/gateway/dispatcher/UiEventDispatcher.java`, <nobr>`DispatcherProperties.java`</nobr> |
-| Error handling | `src/main/java/com/erp/gateway/web/GatewayExceptionHandler.java` |
-| Commands from the database | <nobr>`src/main/java/com/erp/gateway/push/`</nobr> — <nobr>`PgNotificationListener`</nobr>, <nobr>`UiPushBroadcaster`</nobr>, <nobr>`UiPushWebSocketConfig`</nobr>, <nobr>`UiPushProperties`</nobr> |
+| Sign-in, session, CSRF | <nobr>`src/main/java/org/sdbrother/pgerp/security/`</nobr> — <nobr>`SecurityConfig`</nobr>, <nobr>`DatabaseAuthenticationProvider`</nobr>, <nobr>`CsrfCookieFilter`</nobr> |
+| Action controller | `src/main/java/org/sdbrother/pgerp/web/UiEventController.java` |
+| Dispatcher | `src/main/java/org/sdbrother/pgerp/dispatcher/UiEventDispatcher.java`, <nobr>`DispatcherProperties.java`</nobr> |
+| Error handling | `src/main/java/org/sdbrother/pgerp/web/GatewayExceptionHandler.java` |
+| Commands from the database | <nobr>`src/main/java/org/sdbrother/pgerp/push/`</nobr> — <nobr>`PgNotificationListener`</nobr>, <nobr>`UiPushBroadcaster`</nobr>, <nobr>`UiPushWebSocketConfig`</nobr>, <nobr>`UiPushProperties`</nobr> |
 | Client | <nobr>`src/main/resources/static/js/ui-runtime.js`</nobr>, <nobr>`js/menu-editor.js`</nobr>, <nobr>`js/i18n.js`</nobr>, <nobr>`js/theme.js`</nobr>, <nobr>`index.html`</nobr>, <nobr>`editor.html`</nobr>, <nobr>`login.html`</nobr>, <nobr>`css/app.css`</nobr> |
-| Solution development in the editor | <nobr>`js/solution-editor.js`</nobr> (solutions and releases), <nobr>`js/schema-editor.js`</nobr> (data schema), <nobr>`js/sql-console.js`</nobr> (SQL console), <nobr>`js/mcp-access.js`</nobr> (MCP access), <nobr>`js/solution-packages.js`</nobr> (installing solutions), <nobr>`js/editor-kit.js`</nobr> (shared elements); <nobr>`src/main/java/com/erp/gateway/dev/`</nobr> — <nobr>`DevController`</nobr> (release with file saving, package installation), <nobr>`SolutionPackages`</nobr>, <nobr>`SolutionUpgradeRunner`</nobr>, <nobr>`MigrationWriter`</nobr>, <nobr>`DevProperties`</nobr> |
-| MCP server | <nobr>`src/main/java/com/erp/gateway/mcp/`</nobr> — <nobr>`McpController`</nobr> (<nobr>`POST /mcp`</nobr>), <nobr>`McpSecurityConfig`</nobr> and <nobr>`McpTokenFilter`</nobr> (token sign-in), <nobr>`McpGateway`</nobr>, <nobr>`McpProperties`</nobr> |
+| Solution development in the editor | <nobr>`js/solution-editor.js`</nobr> (solutions and releases), <nobr>`js/schema-editor.js`</nobr> (data schema), <nobr>`js/sql-console.js`</nobr> (SQL console), <nobr>`js/mcp-access.js`</nobr> (MCP access), <nobr>`js/solution-packages.js`</nobr> (installing solutions), <nobr>`js/editor-kit.js`</nobr> (shared elements); <nobr>`src/main/java/org/sdbrother/pgerp/dev/`</nobr> — <nobr>`DevController`</nobr> (release with file saving, package installation), <nobr>`SolutionPackages`</nobr>, <nobr>`SolutionUpgradeRunner`</nobr>, <nobr>`MigrationWriter`</nobr>, <nobr>`DevProperties`</nobr> |
+| MCP server | <nobr>`src/main/java/org/sdbrother/pgerp/mcp/`</nobr> — <nobr>`McpController`</nobr> (<nobr>`POST /mcp`</nobr>), <nobr>`McpSecurityConfig`</nobr> and <nobr>`McpTokenFilter`</nobr> (token sign-in), <nobr>`McpGateway`</nobr>, <nobr>`McpProperties`</nobr> |
 | Schema, functions and metadata | <nobr>`src/main/resources/db/migration/V1__core.sql`</nobr> — the core; <nobr>`db/solutions/crm/`</nobr>, <nobr>`db/solutions/examples/`</nobr> — solution packages |
 | Settings | <nobr>`src/main/resources/application.properties`</nobr> — <nobr>`erp.dispatcher.function-name`</nobr>, <nobr>`erp.push.channel`</nobr>, <nobr>`spring.flyway.init-sqls`</nobr>, <nobr>`erp.dev.solutions-dir`</nobr>, <nobr>`erp.dev.auto-update`</nobr>, <nobr>`erp.mcp.allowed-origins`</nobr> |
 
@@ -428,7 +428,7 @@ not rolled back. On another installation the release is applied when the solutio
 "Migrations and solution packages"). Next to the releases lies `solution.json` — the package description (name, title,
 description, default schema); the first saved release creates it.
 
-If the project packages folder is set (`ERP_DEV_SOLUTIONS_DIR`, for example `…/erp-gateway/src/main/resources/db/solutions`),
+If the project packages folder is set (`ERP_DEV_SOLUTIONS_DIR`, for example `…/pgerp/src/main/resources/db/solutions`),
 "Create release" saves the file there (the gateway checks the name and that the version is free in the package); otherwise
 the file is downloaded. The last release can be cancelled (`release_delete`) — the next one collects its changes again.
 
@@ -963,7 +963,7 @@ location /erp/ {
 
 | Variant | Command | Result |
 |---|---|---|
-| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/erp-gateway-<version>.jar`</nobr>, run with <nobr>`java -jar`</nobr> |
+| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/pgerp-<version>.jar`</nobr>, run with <nobr>`java -jar`</nobr> |
 | Docker image | <nobr>`docker build -t pgerp .`</nobr> | Image on JRE 25 (`Dockerfile`) |
 
 Tests need PostgreSQL with an `erp` database (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); without one, package with

@@ -58,7 +58,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp target/erp-gateway-${VERSION}.jar pgerp-${VERSION}.jar
+          cp target/pgerp-${VERSION}.jar pgerp-${VERSION}.jar
           gh release create "$GITHUB_REF_NAME" pgerp-${VERSION}.jar \
             --title "PgERP $VERSION" --generate-notes
 

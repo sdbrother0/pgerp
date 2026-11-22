@@ -8,10 +8,10 @@
 		<version>4.1.2</version>
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
-	<groupId>com.erp</groupId>
-	<artifactId>erp-gateway</artifactId>
-	<version>0.1.0</version>
-	<name>erp-gateway</name>
+	<groupId>org.sdbrother</groupId>
+	<artifactId>pgerp</artifactId>
+	<version>0.2.0</version>
+	<name>pgerp</name>
 	<description/>
 	<url/>
 	<licenses>

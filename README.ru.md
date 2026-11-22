@@ -21,7 +21,7 @@ docker compose up -d
 ```
 
 Образ `ghcr.io/sdbrother0/pgerp` скачивается из GitHub Container Registry. Конкретная версия вместо последней —
-`ERP_VERSION=0.1.0 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
+`ERP_VERSION=0.2.0 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
 из исходников (в клоне репозитория) — `docker compose up -d --build`.
 
 Откройте http://localhost:8099 и войдите как **admin / admin** (при первом входе пароль нужно сменить). Затем

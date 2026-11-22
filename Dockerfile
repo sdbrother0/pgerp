@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q dependency:go-offline
 COPY src src
 # Тесты требуют базу данных — их запускают вне сборки образа
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q package -DskipTests \
- && cp target/erp-gateway-*.jar /src/app.jar \
+ && cp target/pgerp-*.jar /src/app.jar \
  && java -Djarmode=tools -jar /src/app.jar extract --layers --launcher --destination /src/extracted
 
 # ---------- Запуск ----------

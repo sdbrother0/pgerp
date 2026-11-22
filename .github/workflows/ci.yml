@@ -47,5 +47,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: pgerp-jar
-          path: target/erp-gateway-*.jar
+          path: target/pgerp-*.jar
           if-no-files-found: error

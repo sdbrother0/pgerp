@@ -77,14 +77,14 @@ Java не разбирает JSON и не знает предметной обл
 
 | Где | Файл |
 |---|---|
-| Вход, сессия, CSRF | <nobr>`src/main/java/com/erp/gateway/security/`</nobr> — <nobr>`SecurityConfig`</nobr>, <nobr>`DatabaseAuthenticationProvider`</nobr>, <nobr>`CsrfCookieFilter`</nobr> |
-| Контроллер действий | `src/main/java/com/erp/gateway/web/UiEventController.java` |
-| Диспетчер | `src/main/java/com/erp/gateway/dispatcher/UiEventDispatcher.java`, <nobr>`DispatcherProperties.java`</nobr> |
-| Обработка ошибок | `src/main/java/com/erp/gateway/web/GatewayExceptionHandler.java` |
-| Команды из базы | <nobr>`src/main/java/com/erp/gateway/push/`</nobr> — <nobr>`PgNotificationListener`</nobr>, <nobr>`UiPushBroadcaster`</nobr>, <nobr>`UiPushWebSocketConfig`</nobr>, <nobr>`UiPushProperties`</nobr> |
+| Вход, сессия, CSRF | <nobr>`src/main/java/org/sdbrother/pgerp/security/`</nobr> — <nobr>`SecurityConfig`</nobr>, <nobr>`DatabaseAuthenticationProvider`</nobr>, <nobr>`CsrfCookieFilter`</nobr> |
+| Контроллер действий | `src/main/java/org/sdbrother/pgerp/web/UiEventController.java` |
+| Диспетчер | `src/main/java/org/sdbrother/pgerp/dispatcher/UiEventDispatcher.java`, <nobr>`DispatcherProperties.java`</nobr> |
+| Обработка ошибок | `src/main/java/org/sdbrother/pgerp/web/GatewayExceptionHandler.java` |
+| Команды из базы | <nobr>`src/main/java/org/sdbrother/pgerp/push/`</nobr> — <nobr>`PgNotificationListener`</nobr>, <nobr>`UiPushBroadcaster`</nobr>, <nobr>`UiPushWebSocketConfig`</nobr>, <nobr>`UiPushProperties`</nobr> |
 | Клиент | <nobr>`src/main/resources/static/js/ui-runtime.js`</nobr>, <nobr>`js/menu-editor.js`</nobr>, <nobr>`js/i18n.js`</nobr>, <nobr>`js/theme.js`</nobr>, <nobr>`index.html`</nobr>, <nobr>`editor.html`</nobr>, <nobr>`login.html`</nobr>, <nobr>`css/app.css`</nobr> |
-| Разработка решений в редакторе | <nobr>`js/solution-editor.js`</nobr> (решения и выпуски), <nobr>`js/schema-editor.js`</nobr> (схема данных), <nobr>`js/sql-console.js`</nobr> (SQL-консоль), <nobr>`js/mcp-access.js`</nobr> (доступ MCP), <nobr>`js/solution-packages.js`</nobr> (установка решений), <nobr>`js/editor-kit.js`</nobr> (общие элементы); <nobr>`src/main/java/com/erp/gateway/dev/`</nobr> — <nobr>`DevController`</nobr> (выпуск с сохранением файла, установка пакетов), <nobr>`SolutionPackages`</nobr>, <nobr>`SolutionUpgradeRunner`</nobr>, <nobr>`MigrationWriter`</nobr>, <nobr>`DevProperties`</nobr> |
-| MCP-сервер | <nobr>`src/main/java/com/erp/gateway/mcp/`</nobr> — <nobr>`McpController`</nobr> (<nobr>`POST /mcp`</nobr>), <nobr>`McpSecurityConfig`</nobr> и <nobr>`McpTokenFilter`</nobr> (вход по токену), <nobr>`McpGateway`</nobr>, <nobr>`McpProperties`</nobr> |
+| Разработка решений в редакторе | <nobr>`js/solution-editor.js`</nobr> (решения и выпуски), <nobr>`js/schema-editor.js`</nobr> (схема данных), <nobr>`js/sql-console.js`</nobr> (SQL-консоль), <nobr>`js/mcp-access.js`</nobr> (доступ MCP), <nobr>`js/solution-packages.js`</nobr> (установка решений), <nobr>`js/editor-kit.js`</nobr> (общие элементы); <nobr>`src/main/java/org/sdbrother/pgerp/dev/`</nobr> — <nobr>`DevController`</nobr> (выпуск с сохранением файла, установка пакетов), <nobr>`SolutionPackages`</nobr>, <nobr>`SolutionUpgradeRunner`</nobr>, <nobr>`MigrationWriter`</nobr>, <nobr>`DevProperties`</nobr> |
+| MCP-сервер | <nobr>`src/main/java/org/sdbrother/pgerp/mcp/`</nobr> — <nobr>`McpController`</nobr> (<nobr>`POST /mcp`</nobr>), <nobr>`McpSecurityConfig`</nobr> и <nobr>`McpTokenFilter`</nobr> (вход по токену), <nobr>`McpGateway`</nobr>, <nobr>`McpProperties`</nobr> |
 | Схема, функции и метаданные | <nobr>`src/main/resources/db/migration/V1__core.sql`</nobr> — ядро; <nobr>`db/solutions/crm/`</nobr>, <nobr>`db/solutions/examples/`</nobr> — пакеты решений |
 | Настройки | <nobr>`src/main/resources/application.properties`</nobr> — <nobr>`erp.dispatcher.function-name`</nobr>, <nobr>`erp.push.channel`</nobr>, <nobr>`spring.flyway.init-sqls`</nobr>, <nobr>`erp.dev.solutions-dir`</nobr>, <nobr>`erp.dev.auto-update`</nobr>, <nobr>`erp.mcp.allowed-origins`</nobr> |
 
@@ -419,7 +419,7 @@ SQLSTATE) приходит полем ответа. Вкладка «Прове�
 применяется при установке или обновлении решения (см. «Миграции и пакеты решений»). Рядом с выпусками лежит
 `solution.json` — описание пакета (имя, название, описание, схема по умолчанию); его создаёт первый сохранённый выпуск.
 
-Если задана папка пакетов проекта (`ERP_DEV_SOLUTIONS_DIR`, например `…/erp-gateway/src/main/resources/db/solutions`),
+Если задана папка пакетов проекта (`ERP_DEV_SOLUTIONS_DIR`, например `…/pgerp/src/main/resources/db/solutions`),
 «Создать выпуск» сохраняет файл туда (шлюз проверяет имя и что версия в пакете не занята); иначе файл скачивается.
 Последний выпуск можно отменить (`release_delete`) — следующий снова соберёт его изменения.
 
@@ -953,7 +953,7 @@ location /erp/ {
 
 | Вариант | Команда | Результат |
 |---|---|---|
-| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/erp-gateway-<версия>.jar`</nobr>, запуск <nobr>`java -jar`</nobr> |
+| JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/pgerp-<версия>.jar`</nobr>, запуск <nobr>`java -jar`</nobr> |
 | Образ Docker | <nobr>`docker build -t pgerp .`</nobr> | Образ на JRE 25 (`Dockerfile`) |
 
 Тестам нужен PostgreSQL с базой `erp` (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); без него — сборка с
