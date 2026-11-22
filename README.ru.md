@@ -7,7 +7,7 @@
 и обработчики создаются во встроенном редакторе (или ИИ-агентом через MCP) и выпускаются пакетами решений — без
 изменения Java.
 
-![Список дел, сделанный в редакторе](docs/img/todo/ru/15-app-list.png)
+![Счёт со строками: документ master-detail, собранный в редакторе](docs/img/invoices/ru/14-app-card.png)
 
 **Стек:** Java 25 · Spring Boot 4 · PostgreSQL 18 / PL/pgSQL · Flyway · WebSocket · JasperReports · HTML + ES modules
 

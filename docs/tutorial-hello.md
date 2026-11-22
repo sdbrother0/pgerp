@@ -9,6 +9,8 @@ The finished version of this example ships with the platform: **Examples → Hel
 installed by the administrator). Here we build the same thing from scratch. Next step — a full application with a table,
 a list and permissions: [a to-do list from scratch](tutorial-todo.md).
 
+![The finished example](img/hello/en/05-app-message.png)
+
 | Step | Where | What we create |
 |---|---|---|
 | 1 | Sign-in | the form editor |
@@ -50,6 +52,8 @@ start with the **prefix** join it automatically.
 
 "Save", then select **Solution: Greeting** in the sidebar.
 
+![Greeting solution](img/hello/en/01-solution.png)
+
 > Why not <nobr>`hello_`</nobr>: the built-in example already uses the names <nobr>`hello_world`</nobr> and
 > <nobr>`hello_run`</nobr>.
 
@@ -64,6 +68,8 @@ Add two components from the palette on the left:
 | Button | <nobr>`btn_run`</nobr> | Say hello | <nobr>`greet_hello_run`</nobr> — created in the next step |
 
 **The field name** is the key under which its value reaches the function: <nobr>`p_data->>'user_name'`</nobr>.
+
+![The form in the editor](img/hello/en/02-form.png)
 
 ## 4. The button code
 
@@ -95,10 +101,14 @@ Line by line:
 "Save" in the code window: the database creates the function and registers the action — it becomes the button's action
 right away. A compilation error is shown in the window. Then "Save" the form.
 
+![Button code](img/hello/en/03-function.png)
+
 ## 5. Menu
 
 **Menu → "+ Item"** — title "Greeting" (a folder); **"+ Sub-item"** — "Hello World", form <nobr>`greet_hello`</nobr>.
 "Save".
+
+![Menu](img/hello/en/04-menu.png)
 
 An administrator sees all forms. To give the form to other users, add it to a role in **Administration → Roles** — see
 [step 9 of the to-do tutorial](tutorial-todo.md#9-permissions).
@@ -109,8 +119,14 @@ Switch to "Forms" (or press "Open" in the form editor): **Greeting → Hello Wor
 a dialog shows "Hello, Anna". Press the button with an empty field — you get "Enter a name": that is the
 <nobr>`ui_require`</nobr>.
 
+![The message](img/hello/en/05-app-message.png)
+
+![Input check](img/hello/en/06-app-error.png)
+
 The same without the interface: **SQL console → "Action test"**, action <nobr>`greet_hello_run`</nobr>, data
 <nobr>`{"user_name": "Anna"}`</nobr> — the response shows the <nobr>`show_message`</nobr> instruction.
+
+![Action test](img/hello/en/07-action-test.png)
 
 ## 7. Translation
 
@@ -124,13 +140,17 @@ Texts in the form and in <nobr>`ui_t(...)`</nobr> are source texts in English. *
 | Enter a name | Введите имя |
 | Hello, %s | Привет, %s |
 
+![Untranslated](img/hello/en/08-translations.png)
+
 Switch the language in the header: the form and the message are now in Russian — "Привет, Anna". The
 <nobr>`%s`</nobr> placeholder must stay in the translation. If the "Examples" solution is installed, "Enter a name" and
 "Hello, %s" are already translated — the built-in example uses the same texts.
 
+![The greeting in Russian](img/hello/en/09-app-translated.png)
+
 ## Next
 
 - [A to-do list from scratch](tutorial-todo.md) — a table, a list with search, row buttons, permissions and a release
-- [Invoices for goods and services](tutorial-invoices.md) — a document with lines (master-detail), selection windows, totals, statuses, translations, MCP
   of the solution package.
+- [Invoices for goods and services](tutorial-invoices.md) — a document with lines (master-detail), selection windows, totals, statuses, translations, MCP
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — all <nobr>`ui_*`</nobr> functions and how the platform works.

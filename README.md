@@ -7,7 +7,7 @@ PostgreSQL. The Java server is a thin gateway, and the browser is a universal fo
 sent by the database. Forms, menus, permissions and handlers are created in the built-in editor (or by an AI agent over
 MCP) and released as solution packages — without changing Java.
 
-![A to-do list built in the editor](docs/img/todo/en/15-app-list.png)
+![An invoice with lines: a master-detail document built in the editor](docs/img/invoices/en/14-app-card.png)
 
 **Stack:** Java 25 · Spring Boot 4 · PostgreSQL 18 / PL/pgSQL · Flyway · WebSocket · JasperReports · HTML + ES modules
 

@@ -361,6 +361,8 @@ flowchart LR
     A -- "release_create" --> F["Vnumber__solution_name.sql<br/>db/solutions/package folder"]
 ```
 
+![The form editor: an invoice card, its lines table with the "Master" property](docs/img/invoices/en/05-form-invoice.png)
+
 ### Solutions
 
 A solution is an application module (`pgerp.solutions`): a title, a **prefix** of object names (`crm_`), a top-level menu
@@ -448,6 +450,8 @@ The agent works **with the permissions of the token owner**: tools are the actio
 shows only those); development is for administrators only. The `/mcp` security chain is separate
 (`McpSecurityConfig`): no session and no CSRF, cookies and password sign-in do not work here, and a token does not open
 the rest of the application. A request with a foreign `Origin` header is rejected (`ERP_MCP_ALLOWED_ORIGINS` — exceptions).
+
+![MCP access: server address and issuing tokens](docs/img/invoices/en/00-mcp-access.png)
 
 **The protocol** is implemented by the database: `pgerp.mcp_handle(login, request, language)` — `initialize` (with a hint
 to start with `platform_guide`), `ping`, `tools/list`, `tools/call`, request batches; notifications get `202 Accepted`.
