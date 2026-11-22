@@ -139,10 +139,10 @@ public class SolutionPackages {
 		}
 	}
 
-	/** Действующий пользователь — администратор. */
+	/** Действующий администратор, сменивший начальный пароль. */
 	public boolean isAdmin(String login) {
 		return Boolean.TRUE.equals(this.jdbcTemplate.query(
-				"SELECT pgerp.auth_is_admin(id) FROM pgerp.users WHERE login = ? AND is_active",
+				"SELECT pgerp.auth_is_admin(id) FROM pgerp.users WHERE login = ? AND is_active AND NOT must_change_password",
 				(rows) -> rows.next() && rows.getBoolean(1), login));
 	}
 

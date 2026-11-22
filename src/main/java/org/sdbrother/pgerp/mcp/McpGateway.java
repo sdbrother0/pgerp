@@ -40,6 +40,15 @@ public class McpGateway {
 		return hooks.isEmpty() ? null : hooks.get(0);
 	}
 
+	/** Вправе ли владелец токена вызвать инструмент: то же условие, что у маршрутизатора. */
+	public boolean toolAllowed(String login, String tool) {
+		return Boolean.TRUE.equals(this.jdbcTemplate.queryForObject("""
+				SELECT EXISTS (
+				    SELECT 1 FROM pgerp.users u JOIN pgerp.mcp_tools t ON t.name = ?
+				    WHERE u.login = ? AND u.is_active AND NOT u.must_change_password
+				      AND pgerp.auth_action_allowed(u.id, t.action_name))""", Boolean.class, tool, login));
+	}
+
 	/**
 	 * @param login   владелец токена
 	 * @param request тело запроса JSON-RPC

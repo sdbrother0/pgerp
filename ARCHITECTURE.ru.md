@@ -488,9 +488,16 @@ sequenceDiagram
     P->>P: пользователь активен? действие разрешено?
 ```
 
-**Вход.** `pgerp.auth_login` сверяет пароль с bcrypt-хешем (`crypt` из pgcrypto). После 5 неудачных
-попыток подряд вход закрыт на 5 минут. Отключённый пользователь войти не может, а уже открытая сессия
-перестаёт работать при следующем действии (HTTP 401). Если в учётной записи стоит `must_change_password`
+**Вход.** `pgerp.auth_login` сверяет пароль с bcrypt-хешем (`crypt` из pgcrypto). Неудачные попытки считаются
+за 5 минут по логину и источнику — известному браузеру (cookie после удачного входа) или адресу: после 5 источник
+ждёт. У всех неизвестных браузеров вместе — 50 попыток на логин; известных это не касается, поэтому посторонний
+не заблокирует владельца. Ответы для существующих и несуществующих логинов одинаковы. Сохранение карточки
+пользователя снимает блокировку.
+
+**Сессии.** На каждом запросе сессия сверяется с `pgerp.auth_session`, роли берутся из базы. Смена или сброс пароля,
+смена логина, отключение или удаление пользователя закрывают его сессии (HTTP 401) и WebSocket; остаётся только
+сессия, в которой сменили свой пароль. Смена пароля отзывает и токены MCP пользователя. Пока начальный пароль
+не сменён, `/api/dev`, предпросмотр и сохранение отчётов закрыты. Если в учётной записи стоит `must_change_password`
 (первый вход, пароль задан администратором), доступны только действия с `everyone`: клиент сразу
 открывает форму `password_change`, отмена в ней — выход. Первый администратор — **admin / admin**,
 пароль нужно сменить при первом входе. После этого администратор выбирает, какие решения установить
@@ -652,7 +659,7 @@ erDiagram
 | <nobr>`pgerp.forms`</nobr> | Формы: имя, заголовок, папка, действие отмены |
 | <nobr>`pgerp.form_components`</nobr> | Компоненты формы по порядку <nobr>`sort_order`</nobr>; тип проверяется по <nobr>`ui_component_types()`</nobr> |
 | <nobr>`pgerp.ui_actions`</nobr> | Реестр действий — белый список функций, которые можно вызвать из браузера. <nobr>`is_system`</nobr> — системные действия ядра, не показываются в редакторе; <nobr>`everyone`</nobr> — доступно любому вошедшему без выдачи формы |
-| <nobr>`pgerp.users`</nobr> | Пользователи: логин (в нижнем регистре), имя, bcrypt-хеш пароля, <nobr>`is_active`</nobr>, <nobr>`must_change_password`</nobr>, счётчик неудачных попыток и <nobr>`locked_until`</nobr>, время последнего входа, язык <nobr>`lang`</nobr> (пусто — выбранный в браузере или по умолчанию), тема <nobr>`theme`</nobr> (пусто — как в системе) |
+| <nobr>`pgerp.users`</nobr> | Пользователи: логин (в нижнем регистре), имя, bcrypt-хеш пароля, <nobr>`is_active`</nobr>, <nobr>`must_change_password`</nobr>, <nobr>`session_stamp`</nobr> (меняется при отзыве сессий), время последнего входа, язык <nobr>`lang`</nobr> (пусто — выбранный в браузере или по умолчанию), тема <nobr>`theme`</nobr> (пусто — как в системе) |
 | <nobr>`pgerp.roles`</nobr>, <nobr>`pgerp.user_roles`</nobr> | Роли (код, название) и их назначение пользователям; роль <nobr>`admin`</nobr> — полный доступ |
 | <nobr>`pgerp.role_forms`</nobr> | Формы роли; при удалении формы строка удаляется |
 | <nobr>`pgerp.function_templates`</nobr> | Заготовки тел функций для редактора по типу компонента (<nobr>`handler`</nobr> — кнопка, таймер; <nobr>`report`</nobr> — функция данных отчёта); подстановки <nobr>`{name}`</nobr>, <nobr>`{label}`</nobr>, <nobr>`{declare}`</nobr>, <nobr>`{require}`</nobr> |
@@ -736,7 +743,7 @@ erDiagram
 | <nobr>`ui_user_name()`</nobr> | <nobr>`VARCHAR`</nobr> | Имя пользователя для показа: имя из учётной записи, иначе логин (например, автор сообщения в чате) |
 | <nobr>`ui_has_role(p_role VARCHAR)`</nobr> | <nobr>`BOOLEAN`</nobr> | У пользователя есть роль <nobr>`p_role`</nobr> — для проверок внутри обработчика |
 | <nobr>`ui_logout()`</nobr> | <nobr>`JSONB`</nobr> | Инструкция <nobr>`logout`</nobr> |
-| `auth_login(p_login VARCHAR, p_password TEXT, p_lang VARCHAR DEFAULT NULL)` | <nobr>`TABLE(user_login, user_roles, error_message)`</nobr> | Проверка входа (вызывает сервер): логин и роли или текст ошибки; считает неудачные попытки |
+| `auth_login(p_login VARCHAR, p_password TEXT, p_lang VARCHAR DEFAULT NULL, p_address TEXT DEFAULT NULL, p_device TEXT DEFAULT NULL)` | <nobr>`TABLE(user_login, user_roles, error_message)`</nobr> | Проверка входа (вызывает сервер): логин и роли или текст ошибки; считает неудачные попытки по логину и источнику |
 | <nobr>`auth_user_forms(p_user_id BIGINT)`</nobr> | <nobr>`SETOF VARCHAR`</nobr> | Формы пользователя: выданные его ролям и открываемые из них, транзитивно; администратору — все |
 | `auth_action_allowed(p_user_id BIGINT, p_action VARCHAR)` | <nobr>`BOOLEAN`</nobr> | Действие разрешено: администратор, <nobr>`everyone`</nobr> или действие одной из форм <nobr>`auth_user_forms`</nobr> |
 | <nobr>`auth_hash(p_password TEXT)`</nobr>, <nobr>`auth_check_password(p_login, p_password)`</nobr> | | bcrypt-хеш пароля; требования к новому паролю — от 8 до 72 символов, не совпадает с логином |
@@ -909,8 +916,15 @@ docker compose down               # остановить; данные оста�
 
 Настройки compose — переменные окружения или файл `.env` рядом с `compose.yaml`: `ERP_BIND` (адрес на хосте, по умолчанию
 `127.0.0.1` — только этот компьютер; `0.0.0.0` — все интерфейсы, после смены пароля admin), `ERP_PORT` (порт на хосте,
-по умолчанию `8099`; внутри контейнера приложение слушает `8080`), `ERP_DB_PASSWORD` (по умолчанию `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
-`ERP_MCP_ALLOWED_ORIGINS`. Порт базы наружу не открыт; для psql раскомментируйте `ports` у сервиса `db`.
+по умолчанию `8099`; внутри контейнера приложение слушает `8080`), `ERP_DB_PASSWORD` (по умолчанию `postgres`; пароль роли `pgerp`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
+`ERP_MCP_ALLOWED_ORIGINS`. Порт базы наружу не открыт; для psql под ролью `pgerp` раскомментируйте `ports` у сервиса `db`.
+
+В compose приложение работает под ролью `pgerp` без прав суперпользователя. Сервис `db-init` при каждом `up` создаёт её,
+делает владельцем базы `erp` и её объектов (в том числе у баз прежних версий) и снимает пароль у `postgres`.
+Расширения, которым нужен суперпользователь, ставят через сокет:
+`docker compose exec -e PGOPTIONS='-c event_triggers=off -c search_path=pg_catalog' db psql -U postgres -d erp`.
+Вне compose создайте такую роль сами, сделайте её владельцем базы и задайте `ERP_DB_USER`; с `postgres` по умолчанию
+администратор PgERP управляет всем сервером базы.
 Только образ: `docker build -t pgerp .`, затем `docker run -p 8080:8080 -e ERP_DB_URL=… -e ERP_DB_PASSWORD=… pgerp`.
 
 Сервер слушает все сетевые интерфейсы; клиент обращается к серверу относительными путями (`api/ui/event`,

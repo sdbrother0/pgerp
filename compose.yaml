@@ -14,6 +14,8 @@ services:
     volumes:
       # PostgreSQL 18 хранит данные в /var/lib/postgresql/<версия>/docker — том монтируется на уровень выше
       - db-data:/var/lib/postgresql
+      # Сокет — только для db-init: суперпользователь входит через него, по сети у него пароля нет
+      - db-socket:/var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d erp"]
       interval: 5s
@@ -23,6 +25,116 @@ services:
     # ports:
     #   - "5433:5432"
 
+  # При каждом up: роль приложения без прав суперпользователя, она же — владелец базы и всех её объектов
+  # (у баз прежних версий они принадлежали postgres). У postgres снимается пароль; psql суперпользователем —
+  # docker compose exec -e PGOPTIONS='-c event_triggers=off -c search_path=pg_catalog' db psql -U postgres -d erp
+  db-init:
+    image: postgres:18
+    user: postgres
+    restart: "no"
+    network_mode: none
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ROLE: pgerp
+      APP_PASSWORD: ${ERP_DB_PASSWORD:-postgres}
+      # Базой владеет приложение: её search_path и событийные триггеры не должны действовать на суперпользователя
+      PGOPTIONS: -c event_triggers=off -c search_path=pg_catalog,pg_temp -c row_security=off
+    volumes:
+      - db-socket:/var/run/postgresql
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        exec psql -X -q -v ON_ERROR_STOP=1 -U postgres -d erp <<'SQL'
+        \getenv app_role APP_ROLE
+        \getenv app_password APP_PASSWORD
+        BEGIN;
+        SET LOCAL log_statement = 'none';
+        SELECT format('CREATE ROLE %I', :'app_role')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_role') \gexec
+        ALTER ROLE :"app_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+            PASSWORD :'app_password';
+        SELECT format('REVOKE %I FROM %I CASCADE', g.rolname, :'app_role')
+        FROM pg_auth_members m
+        JOIN pg_roles g ON g.oid = m.roleid
+        JOIN pg_roles r ON r.oid = m.member
+        WHERE r.rolname = :'app_role' \gexec
+        SELECT format('ALTER DATABASE %I OWNER TO %I', current_database(), :'app_role') \gexec
+        SELECT set_config('pgerp.app_role', :'app_role', TRUE) \g /dev/null
+        DO $$transfer$$
+        DECLARE
+            app  TEXT := current_setting('pgerp.app_role');
+            me   OID  := (SELECT oid FROM pg_roles WHERE rolname = current_user);
+            stmt TEXT;
+        BEGIN
+            FOR stmt IN
+                WITH ns AS (
+                    SELECT oid, nspname, nspowner FROM pg_namespace
+                    WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'
+                ), ext AS (
+                    SELECT classid, objid FROM pg_depend WHERE deptype = 'e'
+                )
+                SELECT format('ALTER SCHEMA %I OWNER TO %I', n.nspname, app)
+                FROM ns n
+                WHERE n.nspowner = me
+                  AND NOT EXISTS (SELECT 1 FROM ext e WHERE e.classid = 'pg_namespace'::regclass AND e.objid = n.oid)
+                UNION ALL
+                SELECT format('ALTER %s %I.%I OWNER TO %I',
+                              CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                                             WHEN 'S' THEN 'SEQUENCE' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END,
+                              n.nspname, c.relname, app)
+                FROM pg_class c
+                JOIN ns n ON n.oid = c.relnamespace
+                WHERE c.relowner = me AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+                  AND NOT EXISTS (SELECT 1 FROM ext e WHERE e.classid = 'pg_class'::regclass AND e.objid = c.oid)
+                  -- Последовательность колонки переходит вместе с таблицей
+                  AND NOT (c.relkind = 'S' AND EXISTS (
+                      SELECT 1 FROM pg_depend d
+                      WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                        AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')))
+                UNION ALL
+                SELECT format('ALTER ROUTINE %I.%I(%s) OWNER TO %I',
+                              n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), app)
+                FROM pg_proc p
+                JOIN ns n ON n.oid = p.pronamespace
+                WHERE p.proowner = me AND p.prokind <> 'a'
+                  -- В том числе конструкторы диапазонов: с типом они владельца не меняют
+                  AND NOT EXISTS (SELECT 1 FROM ext e WHERE e.classid = 'pg_proc'::regclass AND e.objid = p.oid)
+                UNION ALL
+                SELECT format('ALTER AGGREGATE %I.%I(%s) OWNER TO %I',
+                              n.nspname, p.proname,
+                              COALESCE(NULLIF(pg_get_function_identity_arguments(p.oid), ''), '*'), app)
+                FROM pg_proc p
+                JOIN ns n ON n.oid = p.pronamespace
+                WHERE p.proowner = me AND p.prokind = 'a'
+                  AND NOT EXISTS (SELECT 1 FROM ext e WHERE e.classid = 'pg_proc'::regclass AND e.objid = p.oid)
+                UNION ALL
+                SELECT format('ALTER %s %I.%I OWNER TO %I',
+                              CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, n.nspname, t.typname, app)
+                FROM pg_type t
+                JOIN ns n ON n.oid = t.typnamespace
+                WHERE t.typowner = me AND t.typtype IN ('b', 'c', 'd', 'e', 'r') AND t.typcategory <> 'A'
+                  -- Типы строк таблиц переходят вместе с таблицами
+                  AND (t.typrelid = 0 OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
+                  AND NOT EXISTS (SELECT 1 FROM ext e WHERE e.classid = 'pg_type'::regclass AND e.objid = t.oid)
+            LOOP
+                EXECUTE stmt;
+            END LOOP;
+        END
+        $$transfer$$;
+        -- Функции событийных триггеров теперь у приложения, а срабатывают они и у суперпользователя
+        SELECT format('ALTER EVENT TRIGGER %I DISABLE', e.evtname)
+        FROM pg_event_trigger e
+        JOIN pg_roles r ON r.oid = e.evtowner
+        WHERE r.rolname = current_user AND e.evtenabled <> 'D'
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                          WHERE d.classid = 'pg_event_trigger'::regclass AND d.objid = e.oid AND d.deptype = 'e') \gexec
+        ALTER ROLE CURRENT_USER PASSWORD NULL; -- compose-only
+        COMMIT;
+        SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = current_user AND client_addr IS NOT NULL /* compose-only */ \g /dev/null
+        SQL
+
   app:
     build: .
     image: ghcr.io/sdbrother0/pgerp:${ERP_VERSION:-latest}
@@ -30,9 +142,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     environment:
       ERP_DB_URL: jdbc:postgresql://db:5432/erp
-      ERP_DB_USER: postgres
+      ERP_DB_USER: pgerp
       ERP_DB_PASSWORD: ${ERP_DB_PASSWORD:-postgres}
       SERVER_SERVLET_CONTEXT_PATH: ${ERP_CONTEXT_PATH:-}
       ERP_ALLOWED_ORIGINS: ${ERP_ALLOWED_ORIGINS:-}
@@ -43,3 +157,4 @@ services:
 
 volumes:
   db-data:
+  db-socket:

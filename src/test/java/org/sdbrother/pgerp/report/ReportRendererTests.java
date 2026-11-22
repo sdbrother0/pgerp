@@ -100,4 +100,11 @@ class ReportRendererTests {
 		assertThat(this.renderer.compiled("t", "2", JRXML)).isNotSameAs(first);
 	}
 
+	@Test
+	void hugeTemplateIsRejectedBeforeParsing() {
+		org.assertj.core.api.Assertions.assertThatExceptionOfType(ReportException.class)
+			.isThrownBy(() -> new ReportRenderer().compile(" ".repeat(ReportRenderer.TEMPLATE_LIMIT) + "<"))
+			.withMessageContaining("too large");
+	}
+
 }

@@ -10,6 +10,7 @@ import org.sdbrother.pgerp.dispatcher.UiMessage;
 import org.sdbrother.pgerp.push.UiPushBroadcaster;
 import org.sdbrother.pgerp.security.DatabaseAuthenticationProvider;
 import org.sdbrother.pgerp.security.SecurityConfig;
+import org.sdbrother.pgerp.security.TrustedSessions;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -29,7 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(UiEventController.class)
-@Import(SecurityConfig.class)
+@Import({ SecurityConfig.class, TrustedSessions.class })
 @WithMockUser("anna")
 class UiEventControllerTests {
 

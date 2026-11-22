@@ -23,12 +23,15 @@ import org.springframework.stereotype.Component;
  * RequestContextFilter, он стоит раньше фильтров Spring Security).
  * Java только переносит результат в сессию: логин и роли ({@code ROLE_<роль>}).
  * Права на формы и действия проверяет маршрутизатор при каждом вызове, поэтому роли здесь нужны
- * только для доступа к страницам (редактор форм — роль {@code admin}).
+ * только для доступа к страницам (редактор форм — роль {@code admin}); на каждом запросе их обновляет
+ * {@code SessionCheckFilter}.
  */
 @Component
 public class DatabaseAuthenticationProvider implements AuthenticationProvider {
 
-	private static final String SQL = "SELECT user_login, user_roles, error_message FROM pgerp.auth_login(?, ?, ?)";
+	private static final String SQL = "SELECT user_login, user_roles, error_message FROM pgerp.auth_login(?, ?, ?, ?, ?)";
+
+	private static final String STAMP_SQL = "SELECT stamp FROM pgerp.auth_session(?)";
 
 	private final JdbcClient jdbcClient;
 
@@ -40,13 +43,18 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
 	public Authentication authenticate(Authentication authentication) {
 		String login = authentication.getName();
 		Object credentials = authentication.getCredentials();
+		LoginRequest from = (authentication.getDetails() instanceof LoginRequest request) ? request : new LoginRequest("", "");
+		// Отметка — до проверки пароля, см. LoginDetails
+		String stamp = this.jdbcClient.sql(STAMP_SQL).param(login).query(String.class).optional().orElse(null);
 		LoginResult result = this.jdbcClient.sql(SQL)
 			.param(login)
 			.param((credentials != null) ? credentials.toString() : "")
 			.param(LocaleContextHolder.getLocale().getLanguage())
+			.param(from.address())
+			.param(from.device())
 			.query((rs, rowNum) -> new LoginResult(rs.getString(1), roles(rs.getArray(2)), rs.getString(3)))
 			.single();
-		if (result.error() != null || result.login() == null) {
+		if (result.error() != null || result.login() == null || stamp == null) {
 			// Текст ошибки задаёт база и показывает страница входа
 			throw new BadCredentialsException((result.error() != null) ? result.error() : "Invalid login or password");
 		}
@@ -54,7 +62,10 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
 			.stream()
 			.<GrantedAuthority>map((role) -> new SimpleGrantedAuthority("ROLE_" + role))
 			.toList();
-		return UsernamePasswordAuthenticationToken.authenticated(result.login(), null, authorities);
+		UsernamePasswordAuthenticationToken authenticated = UsernamePasswordAuthenticationToken
+			.authenticated(result.login(), null, authorities);
+		authenticated.setDetails(new LoginDetails(stamp));
+		return authenticated;
 	}
 
 	@Override
@@ -62,7 +73,7 @@ public class DatabaseAuthenticationProvider implements AuthenticationProvider {
 		return UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication);
 	}
 
-	private static List<String> roles(Array array) throws SQLException {
+	static List<String> roles(Array array) throws SQLException {
 		if (array == null) {
 			return List.of();
 		}

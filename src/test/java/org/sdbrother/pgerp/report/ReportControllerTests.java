@@ -7,6 +7,7 @@ import org.sdbrother.pgerp.dispatcher.UiEventDispatcher;
 import org.sdbrother.pgerp.push.UiPushBroadcaster;
 import org.sdbrother.pgerp.security.DatabaseAuthenticationProvider;
 import org.sdbrother.pgerp.security.SecurityConfig;
+import org.sdbrother.pgerp.security.TrustedSessions;
 import org.sdbrother.pgerp.web.GatewayExceptionHandler;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -32,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ReportController.class)
-@Import({ SecurityConfig.class, ReportRenderer.class, GatewayExceptionHandler.class })
+@Import({ SecurityConfig.class, TrustedSessions.class, ReportRenderer.class, GatewayExceptionHandler.class })
 class ReportControllerTests {
 
 	private static final String JRXML = """

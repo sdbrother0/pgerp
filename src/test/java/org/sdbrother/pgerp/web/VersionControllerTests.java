@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.sdbrother.pgerp.push.UiPushBroadcaster;
 import org.sdbrother.pgerp.security.DatabaseAuthenticationProvider;
 import org.sdbrother.pgerp.security.SecurityConfig;
+import org.sdbrother.pgerp.security.TrustedSessions;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.support.StaticListableBeanFactory;
@@ -25,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VersionController.class)
-@Import({ SecurityConfig.class, VersionControllerTests.Build.class })
+@Import({ SecurityConfig.class, TrustedSessions.class, VersionControllerTests.Build.class })
 class VersionControllerTests {
 
 	@Autowired

@@ -88,6 +88,8 @@ public class PgNotificationListener implements SmartLifecycle {
 		}
 		PGConnection pg = connection.unwrap(PGConnection.class);
 		logger.info("Listening for UI commands on channel {}", this.channel);
+		// Пока LISTEN не работал, отзыв сессий мог пройти мимо: подписки переподключаются через проверку сессии
+		this.broadcaster.closeAll();
 		while (isRunning()) {
 			PGNotification[] notifications = pg.getNotifications((int) POLL_INTERVAL.toMillis());
 			if (notifications == null || notifications.length == 0) {

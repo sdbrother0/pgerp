@@ -15,10 +15,12 @@ import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.sdbrother.pgerp.security.DatabaseAuthenticationProvider;
+import org.sdbrother.pgerp.security.TrustedSessions;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -36,6 +38,7 @@ import static org.mockito.BDDMockito.given;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = { "spring.flyway.enabled=false", "erp.dev.auto-update=false" })
+@Import(TrustedSessions.class)
 class UiPushWebSocketTests {
 
 	@LocalServerPort
@@ -85,6 +88,19 @@ class UiPushWebSocketTests {
 		assertThat(bob).isEmpty();
 		annaSession.close();
 		bobSession.close();
+	}
+
+	@Test
+	void revokedUserSubscriptionsAreClosed() throws Exception {
+		WebSocketSession anna = connect(login("anna"), new LinkedBlockingQueue<>());
+		WebSocketSession bob = connect(login("bob"), new LinkedBlockingQueue<>());
+
+		await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+			this.broadcaster.broadcast("{\"revoked_users\": [\"anna\"]}");
+			assertThat(anna.isOpen()).isFalse();
+		});
+		assertThat(bob.isOpen()).isTrue();
+		bob.close();
 	}
 
 	@Test

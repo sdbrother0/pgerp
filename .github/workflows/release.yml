@@ -57,6 +57,9 @@ jobs:
       - name: Database smoke test (fresh install and upgrade)
         run: python3 .github/scripts/db_smoke.py target/pgerp-*.jar
 
+      - name: Compose smoke test (upgrade of a 0.2.2 volume)
+        run: sh .github/scripts/compose_smoke.sh
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

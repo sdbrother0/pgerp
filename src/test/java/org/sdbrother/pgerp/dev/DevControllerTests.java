@@ -7,6 +7,7 @@ import org.sdbrother.pgerp.dispatcher.UiEventDispatcher;
 import org.sdbrother.pgerp.push.UiPushBroadcaster;
 import org.sdbrother.pgerp.security.DatabaseAuthenticationProvider;
 import org.sdbrother.pgerp.security.SecurityConfig;
+import org.sdbrother.pgerp.security.TrustedSessions;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -28,7 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(DevController.class)
-@Import(SecurityConfig.class)
+@Import({ SecurityConfig.class, TrustedSessions.class })
 class DevControllerTests {
 
 	private static final String RELEASE = "{\"status\":\"success\",\"version\":14,\"folder\":\"my_app\","

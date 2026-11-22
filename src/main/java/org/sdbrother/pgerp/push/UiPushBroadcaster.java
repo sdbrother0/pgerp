@@ -66,7 +66,12 @@ public class UiPushBroadcaster extends TextWebSocketHandler {
 
 	/** Сообщение базы — адресатам из поля {@code users} или, без него, всем подписчикам. */
 	public void broadcast(String message) {
-		Set<String> users = recipients(message);
+		Set<String> revoked = logins(message, "revoked_users");
+		if (revoked != null) {
+			closeUsers(revoked);
+			return;
+		}
+		Set<String> users = logins(message, "users");
 		send(() -> new TextMessage(message), (session) -> users == null || users.contains(userName(session)));
 	}
 
@@ -88,7 +93,21 @@ public class UiPushBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	/** Закрыть все подписки при остановке приложения; браузеры потом переподключатся сами. */
+	/**
+	 * Сессии пользователей отозваны (сообщение базы {@code revoked_users}): подписки закрываются. Действительная
+	 * сессия переподключится сама, отозванную не пустит проверка сессии при рукопожатии.
+	 */
+	private void closeUsers(Set<String> users) {
+		for (WebSocketSession session : this.sessions) {
+			String user = userName(session);
+			if (user != null && users.contains(user)) {
+				this.sessions.remove(session);
+				close(session, CloseStatus.NORMAL);
+			}
+		}
+	}
+
+	/** Закрыть все подписки: остановка приложения или обрыв LISTEN; браузеры переподключатся сами. */
 	public void closeAll() {
 		for (WebSocketSession session : this.sessions) {
 			this.sessions.remove(session);
@@ -96,10 +115,10 @@ public class UiPushBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	/** Логины из поля {@code users}; {@code null} — сообщение для всех. */
-	private Set<String> recipients(String message) {
+	/** Логины из поля сообщения; {@code null} — поля нет. */
+	private Set<String> logins(String message, String field) {
 		try {
-			JsonNode users = this.jsonMapper.readTree(message).get("users");
+			JsonNode users = this.jsonMapper.readTree(message).get(field);
 			if (users == null || !users.isArray()) {
 				return null;
 			}

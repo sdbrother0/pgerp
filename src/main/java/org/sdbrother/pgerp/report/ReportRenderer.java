@@ -40,12 +40,18 @@ public class ReportRenderer {
 
 	private static final int MESSAGE_LIMIT = 2000;
 
+	/** Больше — не шаблон, а нагрузка на компилятор; с картинками в base64 хватает с запасом. */
+	static final int TEMPLATE_LIMIT = 5_000_000;
+
 	private final Map<String, JasperReport> cache = new ConcurrentHashMap<>();
 
 	/** Компиляция с проверкой: ошибка разбора XML или выражений — {@link ReportException}. */
 	public JasperReport compile(String jrxml) {
 		if (jrxml == null || jrxml.isBlank()) {
 			throw new ReportException("The report template is empty");
+		}
+		if (jrxml.length() > TEMPLATE_LIMIT) {
+			throw new ReportException("The report template is too large: the limit is %d characters".formatted(TEMPLATE_LIMIT));
 		}
 		try {
 			JasperDesign design = JRXmlLoader.load(new ByteArrayInputStream(jrxml.getBytes(StandardCharsets.UTF_8)));

@@ -12,6 +12,7 @@ import org.sdbrother.pgerp.report.ReportException;
 import org.sdbrother.pgerp.report.ReportRenderer;
 import org.sdbrother.pgerp.security.DatabaseAuthenticationProvider;
 import org.sdbrother.pgerp.security.SecurityConfig;
+import org.sdbrother.pgerp.security.TrustedSessions;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -37,7 +38,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(McpController.class)
-@Import({ McpSecurityConfig.class, SecurityConfig.class, McpControllerTests.Properties.class })
+@Import({ McpSecurityConfig.class, SecurityConfig.class, TrustedSessions.class, McpControllerTests.Properties.class })
 class McpControllerTests {
 
 	private static final String TOKEN = "pgerp_0123456789abcdef0123456789abcdef";
@@ -150,6 +151,7 @@ class McpControllerTests {
 				+ "\"arguments\":{\"name\":\"r\",\"jrxml\":\"<jasperReport\"}}}";
 		given(this.gateway.login(TOKEN)).willReturn("admin");
 		given(this.gateway.toolHook("report_save")).willReturn("compile_jrxml");
+		given(this.gateway.toolAllowed("admin", "report_save")).willReturn(true);
 		given(this.renderer.compile("<jasperReport")).willThrow(new ReportException("XML document structures must start and end"));
 
 		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content(request))
@@ -218,6 +220,68 @@ class McpControllerTests {
 		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content(request))
 			.andExpect(jsonPath("$.result.isError").value(true));
 		then(this.packages).should(never()).list();
+	}
+
+	@Test
+	void compilerIsNotRunWithoutPermission() throws Exception {
+		String request = "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"report_save\","
+				+ "\"arguments\":{\"jrxml\":\"<jasperReport/>\"}}}";
+		String denied = "{\"jsonrpc\":\"2.0\",\"id\":8,\"result\":{\"content\":[],\"isError\":true}}";
+		given(this.gateway.login(TOKEN)).willReturn("anna");
+		given(this.gateway.toolHook("report_save")).willReturn("compile_jrxml");
+		given(this.gateway.handle("anna", request, null)).willReturn(new McpGateway.Result(denied, List.of()));
+
+		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content(request))
+			.andExpect(jsonPath("$.result.isError").value(true));
+		then(this.renderer).shouldHaveNoInteractions();
+	}
+
+	@Test
+	void toolNotificationRunsNothing() throws Exception {
+		String request = "{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"solution_install\"}}";
+		given(this.gateway.login(TOKEN)).willReturn("admin");
+
+		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content(request))
+			.andExpect(status().isAccepted())
+			.andExpect(content().string(""));
+		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content("[" + request + "]"))
+			.andExpect(status().isAccepted());
+		then(this.packages).shouldHaveNoInteractions();
+		then(this.renderer).shouldHaveNoInteractions();
+	}
+
+	@Test
+	void batchPassesGatewayChecks() throws Exception {
+		String request = "[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"report_save\","
+				+ "\"arguments\":{\"jrxml\":\"<broken\"}}},[]]";
+		given(this.gateway.login(TOKEN)).willReturn("admin");
+		given(this.gateway.toolHook("report_save")).willReturn("compile_jrxml");
+		given(this.gateway.toolAllowed("admin", "report_save")).willReturn(true);
+		given(this.renderer.compile("<broken")).willThrow(new ReportException("broken"));
+
+		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content(request))
+			.andExpect(jsonPath("$[0].result.isError").value(true))
+			.andExpect(jsonPath("$[1].error.code").value(-32600));
+		then(this.gateway).should(never()).handle(anyString(), anyString(), any());
+	}
+
+	@Test
+	void batchKeepsDecimalPrecision() throws Exception {
+		String item = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"params\":{\"amount\":12345678901234567.89}}";
+		given(this.gateway.login(TOKEN)).willReturn("admin");
+		given(this.gateway.handle("admin", item, null))
+			.willReturn(new McpGateway.Result("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}", List.of()));
+
+		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content("[" + item + "]"))
+			.andExpect(jsonPath("$[0].result").exists());
+		then(this.gateway).should().handle("admin", item, null);
+	}
+
+	@Test
+	void emptyBatchIsInvalid() throws Exception {
+		given(this.gateway.login(TOKEN)).willReturn("admin");
+		this.mvc.perform(post("/mcp").header("Authorization", "Bearer " + TOKEN).contentType(MediaType.APPLICATION_JSON).content("[]"))
+			.andExpect(jsonPath("$.error.code").value(-32600));
 	}
 
 	@Test

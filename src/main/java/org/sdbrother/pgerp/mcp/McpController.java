@@ -18,6 +18,7 @@ import org.sdbrother.pgerp.report.ReportRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -57,7 +58,12 @@ public class McpController {
 
 	private final SolutionPackages packages;
 
+	private static final int BATCH_LIMIT = 50;
+
 	private final JsonMapper jsonMapper;
+
+	/** Дробные числа — без потери точности: элементы batch уходят в базу записанными заново. */
+	private final JsonMapper exactMapper;
 
 	private final McpProperties properties;
 
@@ -68,6 +74,7 @@ public class McpController {
 		this.writer = writer;
 		this.packages = packages;
 		this.jsonMapper = jsonMapper;
+		this.exactMapper = jsonMapper.rebuild().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build();
 		this.properties = properties;
 	}
 
@@ -81,48 +88,71 @@ public class McpController {
 		}
 		JsonNode rpc;
 		try {
-			rpc = this.jsonMapper.readTree(body);
+			rpc = this.exactMapper.readTree(body);
 		}
 		catch (JacksonException ex) {
 			return json(HttpStatus.BAD_REQUEST, error(null, -32700, "Parse error"));
 		}
-		ObjectNode early = checkReport(rpc);
-		if (early == null) {
-			early = packagesTool(rpc, principal.getName());
+		// Без Accept-Language — язык пользователя, иначе исходный язык платформы, а не локаль сервера
+		String lang = (request.getHeader("Accept-Language") != null) ? locale.getLanguage() : null;
+		if (!(rpc instanceof ArrayNode batch)) {
+			JsonNode response = single(rpc, body, principal.getName(), lang);
+			return (response != null) ? json(HttpStatus.OK, response) : ResponseEntity.accepted().build();
 		}
-		if (early != null) {
-			return json(HttpStatus.OK, early);
+		if (batch.isEmpty() || batch.size() > BATCH_LIMIT) {
+			return json(HttpStatus.OK, error(null, -32600, "Invalid Request"));
 		}
-		McpGateway.Result result;
+		// Каждый элемент — как одиночный запрос, с теми же проверками шлюза
+		ArrayNode responses = this.exactMapper.createArrayNode();
+		for (JsonNode item : batch) {
+			JsonNode response = item.isObject()
+					? single(item, this.exactMapper.writeValueAsString(item), principal.getName(), lang)
+					: error(null, -32600, "Invalid Request");
+			if (response != null) {
+				responses.add(response);
+			}
+		}
+		return responses.isEmpty() ? ResponseEntity.accepted().build() : json(HttpStatus.OK, responses);
+	}
+
+	/** Один запрос JSON-RPC; {@code null} — уведомление, ответа нет. */
+	private JsonNode single(JsonNode rpc, String body, String login, String lang) {
+		if ("tools/call".equals(rpc.path("method").asString(""))) {
+			// Вызов без id — уведомление: база его не выполняет, шлюз тоже
+			if (!rpc.has("id")) {
+				return null;
+			}
+		}
 		try {
-			// Без Accept-Language — язык пользователя, иначе исходный язык платформы, а не локаль сервера
-			String lang = (request.getHeader("Accept-Language") != null) ? locale.getLanguage() : null;
-			result = this.gateway.handle(principal.getName(), body, lang);
+			ObjectNode early = checkReport(rpc, login);
+			if (early == null) {
+				early = packagesTool(rpc, login);
+			}
+			if (early != null) {
+				return early;
+			}
+			McpGateway.Result result = this.gateway.handle(login, body, lang);
+			if (result.response() == null) {
+				return null;
+			}
+			JsonNode response = this.exactMapper.readTree(result.response());
+			complete(response, result.messages());
+			return response;
 		}
 		catch (DataAccessException ex) {
 			logger.error("MCP request failed", ex);
-			return json(HttpStatus.OK, error(rpc.path("id"), -32603, "Internal error"));
+			return error(rpc.path("id"), -32603, "Internal error");
 		}
-		if (result.response() == null) {
-			return ResponseEntity.accepted().build();
-		}
-		JsonNode response = this.jsonMapper.readTree(result.response());
-		if (response instanceof ArrayNode array) {
-			array.forEach((item) -> complete(item, result.messages()));
-		}
-		else {
-			complete(response, result.messages());
-		}
-		return json(HttpStatus.OK, response);
 	}
 
 	/** {@code report_save}: шаблон с ошибкой не уходит в базу — агент получает текст ошибки компиляции. */
-	private ObjectNode checkReport(JsonNode rpc) {
+	private ObjectNode checkReport(JsonNode rpc, String login) {
 		if (!"tools/call".equals(rpc.path("method").asString(""))) {
 			return null;
 		}
 		String tool = rpc.path("params").path("name").asString("");
-		if (!"compile_jrxml".equals(this.gateway.toolHook(tool))) {
+		// Без права компилятор не запускается: отказ вернёт база
+		if (!"compile_jrxml".equals(this.gateway.toolHook(tool)) || !this.gateway.toolAllowed(login, tool)) {
 			return null;
 		}
 		try {
@@ -154,7 +184,7 @@ public class McpController {
 		boolean failed = false;
 		try {
 			if (!this.packages.isAdmin(login)) {
-				text = "Solution packages are available to the administrator only";
+				text = "Solution packages are available to the administrator only, after the initial password change";
 				failed = true;
 			}
 			else if ("solution_install".equals(tool)) {

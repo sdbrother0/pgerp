@@ -498,9 +498,15 @@ sequenceDiagram
     P->>P: is the user active? is the action allowed?
 ```
 
-**Sign-in.** `pgerp.auth_login` checks the password against a bcrypt hash (`crypt` from pgcrypto). After 5 failed
-attempts in a row, sign-in is closed for 5 minutes. A disabled user cannot sign in, and an already open session stops
-working at the next action (HTTP 401). If the account has `must_change_password` (first sign-in, password set by an
+**Sign-in.** `pgerp.auth_login` checks the password against a bcrypt hash (`crypt` from pgcrypto). Failed attempts are counted over
+5 minutes per login and source — a known browser (a cookie issued after a successful sign-in) or an address: after 5 the
+source waits. All unknown browsers together get 50 attempts per login; known browsers are not affected, so a stranger
+cannot lock the owner out. Answers are the same for existing and unknown logins. Saving the user card lifts the lock.
+
+**Sessions.** Every request compares the session with `pgerp.auth_session` and takes the roles from the database.
+A password change or reset, a login change, disabling or deleting the user closes the user's sessions (HTTP 401) and
+WebSockets; only the session that changed its own password stays. A password change also revokes the user's MCP tokens.
+Until the initial password is changed, `/api/dev` and report preview and saving are closed. If the account has `must_change_password` (first sign-in, password set by an
 administrator), only `everyone` actions are available: the client immediately opens the `password_change` form, and
 cancelling it signs out. The first administrator is **admin / admin**; the password must be changed at first sign-in.
 After that the administrator is asked which solutions to install (see "Migrations and solution packages").
@@ -661,7 +667,7 @@ erDiagram
 | <nobr>`pgerp.forms`</nobr> | Forms: name, title, folder, cancel action |
 | <nobr>`pgerp.form_components`</nobr> | Form components in <nobr>`sort_order`</nobr>; the type is checked against <nobr>`ui_component_types()`</nobr> |
 | <nobr>`pgerp.ui_actions`</nobr> | The action registry — a whitelist of functions callable from the browser. <nobr>`is_system`</nobr> — core system actions, not shown in the editor; <nobr>`everyone`</nobr> — available to any signed-in user without granting a form |
-| <nobr>`pgerp.users`</nobr> | Users: login (lower case), name, bcrypt password hash, <nobr>`is_active`</nobr>, <nobr>`must_change_password`</nobr>, failed attempt counter and <nobr>`locked_until`</nobr>, last sign-in time, language <nobr>`lang`</nobr> (empty — chosen in the browser or the default), theme <nobr>`theme`</nobr> (empty — system) |
+| <nobr>`pgerp.users`</nobr> | Users: login (lower case), name, bcrypt password hash, <nobr>`is_active`</nobr>, <nobr>`must_change_password`</nobr>, <nobr>`session_stamp`</nobr> (changes when sessions are revoked), last sign-in time, language <nobr>`lang`</nobr> (empty — chosen in the browser or the default), theme <nobr>`theme`</nobr> (empty — system) |
 | <nobr>`pgerp.roles`</nobr>, <nobr>`pgerp.user_roles`</nobr> | Roles (code, title) and their assignment to users; the <nobr>`admin`</nobr> role has full access |
 | <nobr>`pgerp.role_forms`</nobr> | Role forms; the row is deleted when the form is deleted |
 | <nobr>`pgerp.function_templates`</nobr> | Function body templates for the editor by component type (<nobr>`handler`</nobr> — button, timer; <nobr>`report`</nobr> — report data function); placeholders <nobr>`{name}`</nobr>, <nobr>`{label}`</nobr>, <nobr>`{declare}`</nobr>, <nobr>`{require}`</nobr> |
@@ -746,7 +752,7 @@ and called from the browser.
 | <nobr>`ui_user_name()`</nobr> | <nobr>`VARCHAR`</nobr> | The user name to display: the name from the account, otherwise the login (for example, the author of a chat message) |
 | <nobr>`ui_has_role(p_role VARCHAR)`</nobr> | <nobr>`BOOLEAN`</nobr> | The user has the role <nobr>`p_role`</nobr> — for checks inside a handler |
 | <nobr>`ui_logout()`</nobr> | <nobr>`JSONB`</nobr> | The <nobr>`logout`</nobr> instruction |
-| `auth_login(p_login VARCHAR, p_password TEXT, p_lang VARCHAR DEFAULT NULL)` | <nobr>`TABLE(user_login, user_roles, error_message)`</nobr> | Sign-in check (called by the server): login and roles or an error text; counts failed attempts |
+| `auth_login(p_login VARCHAR, p_password TEXT, p_lang VARCHAR DEFAULT NULL, p_address TEXT DEFAULT NULL, p_device TEXT DEFAULT NULL)` | <nobr>`TABLE(user_login, user_roles, error_message)`</nobr> | Sign-in check (called by the server): login and roles or an error text; counts failed attempts by login and source |
 | <nobr>`auth_user_forms(p_user_id BIGINT)`</nobr> | <nobr>`SETOF VARCHAR`</nobr> | The user's forms: granted to their roles and opened from them, transitively; all forms for an administrator |
 | `auth_action_allowed(p_user_id BIGINT, p_action VARCHAR)` | <nobr>`BOOLEAN`</nobr> | The action is allowed: administrator, <nobr>`everyone`</nobr> or an action of one of the <nobr>`auth_user_forms`</nobr> forms |
 | <nobr>`auth_hash(p_password TEXT)`</nobr>, <nobr>`auth_check_password(p_login, p_password)`</nobr> | | bcrypt password hash; new password requirements — 8 to 72 characters, not equal to the login |
@@ -920,8 +926,16 @@ docker compose down               # stop; data stays in the db-data volume (down
 
 Compose settings — environment variables or an `.env` file next to `compose.yaml`: `ERP_BIND` (host address, default `127.0.0.1` —
 this computer only; `0.0.0.0` — all interfaces, after the admin password is changed), `ERP_PORT` (port on the host,
-default `8099`; inside the container the application listens on `8080`), `ERP_DB_PASSWORD` (default `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
-`ERP_MCP_ALLOWED_ORIGINS`. The database port is not published; uncomment `ports` of the `db` service to connect with psql.
+default `8099`; inside the container the application listens on `8080`), `ERP_DB_PASSWORD` (default `postgres`; the password of the `pgerp` role), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
+`ERP_MCP_ALLOWED_ORIGINS`. The database port is not published; uncomment `ports` of the `db` service to connect with psql
+as `pgerp`.
+
+In compose the application works as the `pgerp` role without superuser rights. The `db-init` service creates it on every
+`up`, makes it the owner of the `erp` database and its objects (also in databases of earlier versions) and removes the
+password of `postgres`. Extensions that need a superuser are installed through the socket:
+`docker compose exec -e PGOPTIONS='-c event_triggers=off -c search_path=pg_catalog' db psql -U postgres -d erp`.
+Outside compose create such a role yourself, make it the owner of the database and set `ERP_DB_USER`; with the default
+`postgres` a PgERP administrator controls the whole database server.
 The image alone: `docker build -t pgerp .`, then `docker run -p 8080:8080 -e ERP_DB_URL=… -e ERP_DB_PASSWORD=… pgerp`.
 
 The server listens on all network interfaces; the client calls the server with relative paths (`api/ui/event`,
