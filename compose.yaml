@@ -154,6 +154,8 @@ services:
       SERVER_SERVLET_CONTEXT_PATH: ${ERP_CONTEXT_PATH:-}
       ERP_ALLOWED_ORIGINS: ${ERP_ALLOWED_ORIGINS:-}
       ERP_MCP_ALLOWED_ORIGINS: ${ERP_MCP_ALLOWED_ORIGINS:-}
+      # Прокси, которым верить в X-Forwarded-*. Прокси на хосте виден контейнеру как шлюз сети, например 172.18.0.1/32
+      ERP_TRUSTED_PROXIES: ${ERP_TRUSTED_PROXIES-127.0.0.0/8,::1/128}
     ports:
       # Только этот компьютер: первый вход — admin / admin. Доступ из сети — ERP_BIND=0.0.0.0, сменив пароль admin
       - "${ERP_BIND:-127.0.0.1}:${ERP_PORT:-8099}:8080"

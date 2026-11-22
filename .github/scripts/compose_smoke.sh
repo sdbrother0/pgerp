@@ -1,6 +1,6 @@
 #!/bin/sh
-# compose целиком: том, созданный 0.2.2 (приложение — postgres), обновляется текущим compose.yaml и образом из
-# исходников. Свой проект, порт и том; в конце всё это удаляется. Нужны docker и curl.
+# compose целиком: чистая установка текущим compose.yaml и образом из исходников, перезапуск с сохранением данных.
+# Свой проект, порт и том; в конце всё это удаляется. Нужны docker и curl.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -39,18 +39,12 @@ login() {
 		-d 'username=admin&password=admin' "$URL/api/auth/login"
 }
 
-curl -fsS -o "$TMP/compose.yaml" https://raw.githubusercontent.com/sdbrother0/pgerp/v0.2.2/compose.yaml
-ERP_VERSION=0.2.2 docker compose -p "$PROJECT" -f "$TMP/compose.yaml" up -d --no-build
-wait_app
-login
-su_sql "CREATE TABLE public.kept AS SELECT 7 AS n"
-echo "ok   0.2.2 is running"
-
 new build app
 new up -d --no-build
 wait_app
 login
-echo "ok   sign-in after the upgrade"
+echo "ok   fresh installation, sign-in"
+su_sql "CREATE TABLE public.kept AS SELECT 7 AS n"
 
 [ "$(su_sql "SELECT n FROM public.kept")" = 7 ] || { echo "FAIL data lost"; exit 1; }
 [ "$(su_sql "SELECT rolsuper FROM pg_roles WHERE rolname = 'pgerp'")" = f ] || { echo "FAIL pgerp is a superuser"; exit 1; }
@@ -69,5 +63,18 @@ new down
 new up -d --no-build
 wait_app
 login
-echo "ok   restart"
+[ "$(su_sql "SELECT n FROM public.kept")" = 7 ] || { echo "FAIL data lost on restart"; exit 1; }
+echo "ok   restart keeps data"
+
+# Клиент опубликованного порта — не прокси: выдуманный адрес не даёт новых попыток входа
+guess() {
+	rm -f "$TMP/guess"
+	curl -fsS -o /dev/null -c "$TMP/guess" "$URL/login.html"
+	token=$(awk '$6 == "XSRF-TOKEN" {print $7}' "$TMP/guess")
+	curl -sS -b "$TMP/guess" -H "X-XSRF-TOKEN: $token" -H "X-Forwarded-For: $1" \
+		-d 'username=forwarded&password=wrong' "$URL/api/auth/login"
+}
+for n in 1 2 3 4 5; do guess "203.0.113.$n" >/dev/null; done
+guess 203.0.113.6 | grep -q "Too many" || { echo "FAIL X-Forwarded-For bypasses the sign-in limit"; exit 1; }
+echo "ok   made-up X-Forwarded-For is ignored"
 echo "compose smoke test passed"

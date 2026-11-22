@@ -112,6 +112,20 @@ class UiPushSlowClientTests {
 		await().atMost(5, TimeUnit.SECONDS).until(() -> broken.closed.contains(CloseStatus.SESSION_NOT_RELIABLE));
 	}
 
+	@Test
+	void unclearRecipientsReceiveNothing() throws Exception {
+		Tab anna = tab("anna");
+		promptly(() -> {
+			List.of("", "x", "null", "[]", "{\"users\": \"bob\"}", "{\"users\": null}",
+					"{\"users\": [{\"login\": \"bob\"}]}", "{\"users\": [null]}", "{\"revoked_users\": \"anna\"}")
+				.forEach(this.broadcaster::broadcast);
+			this.broadcaster.broadcast("{\"users\": [\"anna\"]}");
+		});
+		await().atMost(5, TimeUnit.SECONDS).until(() -> !anna.received.isEmpty());
+		assertThat(anna.received).containsExactly("{\"users\": [\"anna\"]}");
+		assertThat(anna.closed).isEmpty();
+	}
+
 	private void promptly(Runnable action) throws Exception {
 		var executor = Executors.newVirtualThreadPerTaskExecutor();
 		CompletableFuture.runAsync(action, executor).get(2, TimeUnit.SECONDS);

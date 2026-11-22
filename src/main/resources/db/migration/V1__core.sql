@@ -13,6 +13,7 @@
 -- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE SCHEMA pgerp;
 
 -- Прикладной код вызывает помощники ядра без схемы: ui_ok(...). public — первой: объекты ядра
@@ -22,13 +23,31 @@ BEGIN
     EXECUTE format('ALTER DATABASE %I SET search_path = public, pgerp', current_database());
 END;
 $$;
+
 SET search_path = public, pgerp;
+
 -- Функции ссылаются на функции и таблицы, объявленные ниже в этом же файле
 SET LOCAL check_function_bodies = off;
+
+-- #####################################################################
+-- Таблицы, типы, индексы
+-- #####################################################################
+
+-- ---------------------------------------------------------------------
+-- Функции, на которые ссылаются таблицы (CHECK, DEFAULT)
+-- ---------------------------------------------------------------------
+
+-- Единый перечень типов компонентов (раньше был продублирован в ui_form_save).
+CREATE FUNCTION pgerp.ui_component_types()
+RETURNS VARCHAR[] AS $$
+    SELECT ARRAY['label', 'input', 'date', 'hidden', 'display', 'lookup', 'combobox', 'button', 'grid',
+                 'board', 'timer', 'tree', 'chart']::VARCHAR[];
+$$ LANGUAGE sql IMMUTABLE;
 
 -- ---------------------------------------------------------------------
 -- Таблицы
 -- ---------------------------------------------------------------------
+
 -- Реестр действий: какое действие UI какой PL/pgSQL-функцией обрабатывается.
 -- Функция-обработчик имеет сигнатуру: fn(p_data JSON) RETURNS JSON.
 CREATE TABLE pgerp.ui_actions (
@@ -51,7 +70,8 @@ CREATE TABLE pgerp.form_components (
     id             SERIAL PRIMARY KEY,
     form_name      VARCHAR(50) NOT NULL REFERENCES pgerp.forms(form_name) ON DELETE CASCADE,
     sort_order     INT NOT NULL,
-    component_type VARCHAR(20) NOT NULL,
+    component_type VARCHAR(20) NOT NULL
+        CONSTRAINT form_components_component_type_check CHECK (component_type = ANY (pgerp.ui_component_types())),
     component_name VARCHAR(50) NOT NULL,
     label          VARCHAR(200),
     action_event   VARCHAR(100) REFERENCES pgerp.ui_actions(action_name),
@@ -94,7 +114,9 @@ CREATE TABLE pgerp.menu_items (
     form_name  VARCHAR(50) REFERENCES pgerp.forms(form_name) ON UPDATE CASCADE ON DELETE SET NULL,
     CHECK (trim(title) <> '')
 );
+
 CREATE INDEX menu_items_parent_id_sort_order_idx ON pgerp.menu_items USING btree (parent_id, sort_order);
+
 CREATE INDEX menu_items_form_name_idx ON pgerp.menu_items USING btree (form_name);
 
 CREATE TABLE pgerp.languages (
@@ -107,7 +129,9 @@ CREATE TABLE pgerp.languages (
     sort_order INT NOT NULL DEFAULT 0,
     CHECK (code ~ '^[a-z]{2,3}$')
 );
+
 CREATE UNIQUE INDEX languages_source_key ON pgerp.languages USING btree (is_source) WHERE is_source;
+
 CREATE UNIQUE INDEX languages_default_key ON pgerp.languages USING btree (is_default) WHERE is_default;
 
 CREATE TABLE pgerp.themes (
@@ -131,6 +155,8 @@ CREATE TABLE pgerp.users (
     lang                 VARCHAR(10) REFERENCES pgerp.languages(code) ON UPDATE CASCADE ON DELETE SET NULL,
     -- Тема пользователя: по умолчанию светлая; NULL — «Как в системе» (выбор в переключателе)
     theme                VARCHAR(20) DEFAULT 'light' REFERENCES pgerp.themes(code) ON UPDATE CASCADE ON DELETE SET NULL,
+    -- Отметка сессии: меняется со сменой пароля, логина или состояния
+    session_stamp        UUID NOT NULL DEFAULT gen_random_uuid(),
     CHECK (login ~ '^[a-z0-9][a-z0-9_.@-]*$')
 );
 
@@ -148,6 +174,7 @@ CREATE TABLE pgerp.user_roles (
     role_id BIGINT NOT NULL REFERENCES pgerp.roles(id) ON DELETE CASCADE,
     UNIQUE (user_id, role_id)
 );
+
 CREATE INDEX user_roles_role_id_idx ON pgerp.user_roles USING btree (role_id);
 
 CREATE TABLE pgerp.role_forms (
@@ -156,6 +183,7 @@ CREATE TABLE pgerp.role_forms (
     form_name VARCHAR(50) NOT NULL REFERENCES pgerp.forms(form_name) ON UPDATE CASCADE ON DELETE CASCADE,
     UNIQUE (role_id, form_name)
 );
+
 CREATE INDEX role_forms_form_name_idx ON pgerp.role_forms USING btree (form_name);
 
 CREATE TABLE pgerp.translations (
@@ -168,12 +196,235 @@ CREATE TABLE pgerp.translations (
     CHECK (source <> ''),
     CHECK (translation <> '')
 );
+
 CREATE INDEX translations_lang_idx ON pgerp.translations USING btree (lang) WHERE is_template;
+
+-- ---------------------------------------------------------------------
+-- Сессии и вход
+-- 1. У пользователя есть отметка сессии: смена пароля, логина или состояния её меняет. Шлюз сверяет отметку
+--    на каждом запросе и берёт роли из базы, а не из сессии. Открытые WebSocket закрывает сообщение revoked_users.
+--    Смена пароля отзывает и токены MCP пользователя.
+-- 2. Неудачные попытки входа считаются по паре «логин + источник» одинаково для любых логинов, есть ли они или нет.
+--    Источник — известный браузер (cookie после удачного входа), иначе адрес. От перебора со многих адресов —
+--    общий предел на логин; известных браузеров он не касается, поэтому владельца посторонний не заблокирует.
+-- ---------------------------------------------------------------------
+
+CREATE TABLE pgerp.auth_failures (
+    id        BIGSERIAL PRIMARY KEY,
+    login     TEXT NOT NULL,
+    bucket    TEXT NOT NULL,
+    failed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX auth_failures_login_idx ON pgerp.auth_failures (login, failed_at);
+
+CREATE INDEX auth_failures_failed_at_idx ON pgerp.auth_failures (failed_at);
+
+COMMENT ON TABLE pgerp.auth_failures IS 'Failed sign-in attempts of the last minutes, for existing and unknown logins alike';
+
+CREATE TABLE pgerp.auth_devices (
+    token_hash TEXT PRIMARY KEY,
+    user_id    BIGINT NOT NULL REFERENCES pgerp.users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX auth_devices_user_id_idx ON pgerp.auth_devices (user_id);
+
+COMMENT ON TABLE pgerp.auth_devices IS 'Browsers that signed in successfully: they have their own failed attempt counter';
+
+-- =====================================================================
+-- Редактор функций действий (кнопка «{ }» у поля «Действие» в редакторе форм).
+--
+--  * function_get — код функции действия для правки или, если действия ещё нет, заготовка
+--    под тип компонента: обработчик кнопки/таймера с полями формы, источник таблицы, дерева,
+--    выпадающего списка, открытие списка для поля выбора.
+--  * function_save — создать или заменить функцию и зарегистрировать действие.
+--
+-- Правятся только прикладные обработчики public.имя(JSON) RETURNS JSON без особых свойств;
+-- функции ядра (pgerp) и прочие показываются только для чтения. Клиент присылает не SQL, а имя,
+-- язык, изменчивость и тело: заголовок CREATE FUNCTION собирает база (%I, ограничитель тела,
+-- которого нет в самом теле) — дописать к нему второй оператор нельзя. Оба действия системные:
+-- доступны только администратору.
+--
+-- Функции, созданные в редакторе, живут в базе, как и формы из редактора форм; чтобы они попали
+-- в новую установку, их переносят в миграцию.
+-- =====================================================================
+
+-- Заготовки тел функций по типу компонента; handler — кнопка, таймер и остальные.
+-- Подстановки: {name} — имя действия, {label} — подпись компонента, {label_literal} — она же строкой SQL,
+-- {declare} — переменные для полей формы, {require} — проверка первого поля
+CREATE TABLE pgerp.function_templates (
+    component_type VARCHAR(20) PRIMARY KEY,
+    body           TEXT        NOT NULL
+);
+
+-- =====================================================================
+-- Отчёты PDF (JasperReports)
+-- =====================================================================
+
+-- Шаблон отчёта (jrxml) хранится в базе вместе с функцией данных. Функция данных — обычная
+-- функция действия fn(p_data JSON) RETURNS JSON; она получает параметры из ui_report и возвращает
+-- JSON-объект: ключи верхнего уровня — параметры отчёта ($P{...}), массив rows — строки ($F{...}).
+-- Тексты $R{...} в шаблоне переводятся по таблице переводов на язык пользователя.
+--
+-- Показ отчёта — инструкция из любого действия:
+--     RETURN ui_ok(ui_report('my_app_invoice', jsonb_build_object('id', v_id)));
+-- ui_report запоминает запрос (кто, какой отчёт, с какими параметрами) и возвращает инструкцию
+-- show_report с адресом api/reports/<id>. Право на отчёт даёт само действие: по адресу отчёт
+-- получит только тот же пользователь и только в течение часа. Шлюз берёт шаблон и данные
+-- действием report_fill, заполняет отчёт JasperReports и отдаёт PDF; клиент показывает его в окне.
+--
+-- Редактор отчётов (editor.html?reports, только администратор): report_list, report_get,
+-- report_save (шлюз сначала компилирует jrxml), report_delete, report_preview (данные для
+-- предпросмотра несохранённого шаблона).
+
+CREATE TABLE pgerp.reports (
+    name          VARCHAR(63) PRIMARY KEY CHECK (name ~ '^[a-z_][a-z0-9_]*$'),
+    title         TEXT NOT NULL CHECK (title <> ''),
+    data_action   VARCHAR(100) REFERENCES pgerp.ui_actions(action_name) ON UPDATE CASCADE,
+    sample_params JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(sample_params) = 'object'),
+    jrxml         TEXT NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by    VARCHAR(100)
+);
+
+COMMENT ON TABLE pgerp.reports IS 'PDF reports: JasperReports template (jrxml) and the action that supplies the data';
+
+COMMENT ON COLUMN pgerp.reports.sample_params IS 'Parameters for the preview in the editor, e.g. {"id": 1}';
+
+-- Запросы на показ отчёта: адрес api/reports/<id> действует час и только для того, кто его получил
+CREATE TABLE pgerp.report_requests (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    login       VARCHAR(100) NOT NULL,
+    report_name VARCHAR(63) NOT NULL REFERENCES pgerp.reports(name) ON UPDATE CASCADE ON DELETE CASCADE,
+    params      JSONB NOT NULL,
+    title       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX report_requests_created_at_idx ON pgerp.report_requests (created_at);
+
+-- ---------------------------------------------------------------------
+-- Решения и их состав
+-- ---------------------------------------------------------------------
+
+CREATE TABLE pgerp.solutions (
+    name             VARCHAR(50) PRIMARY KEY CHECK (name ~ '^[a-z][a-z0-9_]*$' AND name NOT IN ('core', 'pgerp')),
+    title            VARCHAR(200) NOT NULL CHECK (trim(title) <> ''),
+    prefix           VARCHAR(30) UNIQUE CHECK (prefix ~ '^[a-z][a-z0-9_]*$'),
+    menu_folder      VARCHAR(200),
+    -- Папка пакета решения: db/solutions/<папка>/ (выпуски V<n>__….sql и solution.json)
+    migration_folder VARCHAR(100) NOT NULL CHECK (migration_folder ~ '^[a-z][a-z0-9_]*$'),
+    description      TEXT,
+    -- Схема базы, в которой лежат таблицы, представления и функции решения
+    db_schema        VARCHAR(63) NOT NULL DEFAULT 'public'
+        CHECK (db_schema ~ '^[a-z_][a-z0-9_]*$' AND db_schema !~ '^pg_' AND db_schema <> 'pgerp'),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Настройки установки: solutions_setup — администратор уже выбрал решения при первом входе
+CREATE TABLE pgerp.settings (
+    key        VARCHAR(100) PRIMARY KEY,
+    value      JSONB,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Объекты, добавленные в решение явно (без префикса или вопреки чужому префиксу)
+CREATE TABLE pgerp.solution_objects (
+    object_type VARCHAR(20) NOT NULL
+        CHECK (object_type IN ('table', 'view', 'sequence', 'function', 'type', 'form', 'action', 'report', 'role')),
+    object_name VARCHAR(100) NOT NULL,
+    solution    VARCHAR(50) NOT NULL REFERENCES pgerp.solutions(name) ON UPDATE CASCADE ON DELETE CASCADE,
+    PRIMARY KEY (object_type, object_name)
+);
+
+-- Таблицы, строки которых переносятся выпуском (справочники, настройки, демо-данные)
+CREATE TABLE pgerp.solution_data (
+    table_name VARCHAR(63) PRIMARY KEY,
+    solution   VARCHAR(50) NOT NULL REFERENCES pgerp.solutions(name) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+-- Выпуски: снимок решения на момент выпуска — основа для следующей разницы
+CREATE TABLE pgerp.solution_releases (
+    solution   VARCHAR(50) NOT NULL REFERENCES pgerp.solutions(name) ON UPDATE CASCADE ON DELETE CASCADE,
+    version    INT NOT NULL CHECK (version >= 0),
+    label      VARCHAR(200) NOT NULL,
+    file_name  VARCHAR(200),
+    script     TEXT,
+    snapshot   JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by VARCHAR(50),
+    PRIMARY KEY (solution, version)
+);
+
+-- Переименования из конструктора таблиц: выпуск переименует, а не удалит и создаст заново
+CREATE TABLE pgerp.solution_renames (
+    id         BIGSERIAL PRIMARY KEY,
+    kind       VARCHAR(10) NOT NULL CHECK (kind IN ('table', 'column')),
+    table_name VARCHAR(63) NOT NULL,
+    old_name   VARCHAR(63) NOT NULL,
+    new_name   VARCHAR(63) NOT NULL,
+    renamed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
+-- ---------------------------------------------------------------------
+-- Граница ядра и решений
+--
+-- Ядро — не решение. Его объекты в решения не входят, выпуском не меняются и с переустановкой решения не удаляются:
+--   * функции — всё, что есть в схеме pgerp; функция решения с таким именем недопустима: путь поиска ставит
+--     схемы решений раньше pgerp, и она подменила бы функцию ядра и для самого ядра;
+--   * формы, действия, отчёты, роли и папки меню ядра перечислены в core_objects (заполняется в конце миграции).
+-- Это защита от ошибок разработки, а не от администратора базы: владелец базы может изменить и саму проверку.
+-- ---------------------------------------------------------------------
+
+CREATE TABLE pgerp.core_objects (
+    object_type VARCHAR(20) NOT NULL CHECK (object_type IN ('form', 'action', 'report', 'role', 'menu')),
+    object_name VARCHAR(200) NOT NULL,
+    PRIMARY KEY (object_type, object_name)
+);
+
+-- =====================================================================
+
+
+CREATE TABLE pgerp.mcp_tokens (
+    id           BIGSERIAL PRIMARY KEY,
+    user_id      BIGINT NOT NULL REFERENCES pgerp.users(id) ON DELETE CASCADE,
+    title        VARCHAR(200) NOT NULL CHECK (trim(title) <> ''),
+    token_hash   TEXT NOT NULL UNIQUE,
+    token_hint   VARCHAR(20) NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by   VARCHAR(50),
+    last_used_at TIMESTAMPTZ,
+    expires_at   TIMESTAMPTZ
+);
+
+CREATE INDEX mcp_tokens_user_id_idx ON pgerp.mcp_tokens (user_id);
+
+-- Инструменты: имя → действие. fixed_args дописываются к аргументам вызова (например, исходные тексты формы);
+-- hook — обработка в шлюзе: compile_jrxml — проверка шаблона отчёта до сохранения,
+-- write_migration — запись файла выпуска в пакет решения (ERP_DEV_SOLUTIONS_DIR), packages — инструмент целиком
+-- выполняет шлюз (пакеты решений лежат в приложении): action_name задаёт права на него
+CREATE TABLE pgerp.mcp_tools (
+    name         VARCHAR(64) PRIMARY KEY CHECK (name ~ '^[a-z][a-z0-9_]*$'),
+    action_name  VARCHAR(100) NOT NULL REFERENCES pgerp.ui_actions(action_name) ON UPDATE CASCADE ON DELETE CASCADE,
+    title        VARCHAR(200) NOT NULL,
+    description  TEXT NOT NULL,
+    input_schema JSONB NOT NULL DEFAULT '{"type": "object", "properties": {}}' CHECK (input_schema->>'type' = 'object'),
+    fixed_args   JSONB CHECK (fixed_args IS NULL OR jsonb_typeof(fixed_args) = 'object'),
+    read_only    BOOLEAN NOT NULL DEFAULT FALSE,
+    hook         VARCHAR(30) CHECK (hook IN ('compile_jrxml', 'write_migration', 'packages')),
+    sort_order   INT NOT NULL DEFAULT 0
+);
+
+-- #####################################################################
+-- Функции
+-- #####################################################################
 
 -- ---------------------------------------------------------------------
 -- Функции
 -- ---------------------------------------------------------------------
-SET LOCAL check_function_bodies = off;  -- функции ссылаются друг на друга и на представления ниже
+
+  -- функции ссылаются друг на друга и на представления ниже
 
 -- Параметры пагинации из запроса таблицы: {"page": 1, "limit": 10}
 CREATE FUNCTION pgerp.ui_page_param(p_data JSON, p_key VARCHAR, p_default INT, p_max INT)
@@ -656,13 +907,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Единый перечень типов компонентов (раньше был продублирован в ui_form_save).
-CREATE FUNCTION pgerp.ui_component_types()
-RETURNS VARCHAR[] AS $$
-    SELECT ARRAY['label', 'input', 'date', 'hidden', 'display', 'lookup', 'combobox', 'button', 'grid',
-                 'board', 'timer', 'tree', 'chart']::VARCHAR[];
-$$ LANGUAGE sql IMMUTABLE;
-
 -- Элементы выпадающего списка из таблицы или представления: {status, items: [{id, label}]},
 -- по алфавиту подписи. Имена колонок задаёт код функции-источника, не клиент.
 CREATE FUNCTION pgerp.ui_combo_items(p_source REGCLASS,
@@ -912,20 +1156,43 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 -- Сообщение {"form", "ui_instructions", "users"?}: users — логины адресатов, без него — всем.
--- Пустой список адресатов — ничего не отправляется.
+-- Пустой список адресатов — ничего не отправляется. NOTIFY вмещает 8000 байт: длинный список адресатов
+-- делится на сообщения, у каждого — свои.
 CREATE FUNCTION pgerp.ui_push_send(p_form VARCHAR, p_users VARCHAR[], p_instructions JSONB[])
 RETURNS VOID AS $$
 DECLARE
+    c_limit CONSTANT INT := 7900;
+    v_base    JSONB;
+    v_user    VARCHAR;
+    v_batch   VARCHAR[] := '{}';
     v_message TEXT;
+    v_next    TEXT;
 BEGIN
     IF p_users IS NOT NULL AND cardinality(p_users) = 0 THEN
         RETURN;
     END IF;
-    v_message := (jsonb_build_object(
+    v_base := jsonb_build_object(
         'form', p_form,
-        'ui_instructions', pgerp.ui_ok(VARIADIC p_instructions)->'ui_instructions')
-        || CASE WHEN p_users IS NOT NULL THEN jsonb_build_object('users', p_users) ELSE '{}' END)::TEXT;
-    IF octet_length(v_message) > 7900 THEN
+        'ui_instructions', pgerp.ui_ok(VARIADIC p_instructions)->'ui_instructions');
+
+    IF p_users IS NULL THEN
+        v_message := v_base::TEXT;
+    ELSE
+        FOREACH v_user IN ARRAY p_users LOOP
+            v_next := (v_base || jsonb_build_object('users', array_append(v_batch, v_user)))::TEXT;
+            IF octet_length(v_next) > c_limit AND cardinality(v_batch) > 0 THEN
+                PERFORM pg_notify('erp_ui', v_message);
+                v_batch := '{}';
+                v_next := (v_base || jsonb_build_object('users', array_append(v_batch, v_user)))::TEXT;
+            END IF;
+            EXIT WHEN octet_length(v_next) > c_limit;
+            v_batch := array_append(v_batch, v_user);
+            v_message := v_next;
+        END LOOP;
+        v_message := v_next;
+    END IF;
+
+    IF octet_length(v_message) > c_limit THEN
         RAISE EXCEPTION 'ui_push: the message exceeds 8000 bytes — send less data in it';
     END IF;
     PERFORM pg_notify('erp_ui', v_message);
@@ -1381,6 +1648,7 @@ $$ LANGUAGE plpgsql STABLE;
 -- ---------------------------------------------------------------------
 -- Схемы прикладного кода: public и схемы установленных решений (pgerp.solutions.db_schema)
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION pgerp.app_schemas()
 RETURNS VARCHAR[] AS $$
     SELECT ARRAY['public']::VARCHAR[] || COALESCE(ARRAY(
@@ -1493,59 +1761,154 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Вход. Ошибка — в error_message (текст для пользователя), иначе логин и роли.
--- Неудачные попытки считаются; после 5 подряд вход закрыт на 5 минут.
-CREATE FUNCTION pgerp.auth_login(p_login VARCHAR, p_password TEXT, p_lang VARCHAR DEFAULT NULL)
+-- ---------------------------------------------------------------------
+-- Сессии и вход
+-- 1. У пользователя есть отметка сессии: смена пароля, логина или состояния её меняет. Шлюз сверяет отметку
+--    на каждом запросе и берёт роли из базы, а не из сессии. Открытые WebSocket закрывает сообщение revoked_users.
+--    Смена пароля отзывает и токены MCP пользователя.
+-- 2. Неудачные попытки входа считаются по паре «логин + источник» одинаково для любых логинов, есть ли они или нет.
+--    Источник — известный браузер (cookie после удачного входа), иначе адрес. От перебора со многих адресов —
+--    общий предел на логин; известных браузеров он не касается, поэтому владельца посторонний не заблокирует.
+-- ---------------------------------------------------------------------
+
+CREATE FUNCTION pgerp.auth_session_rotate()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (NEW.password_hash, NEW.login, NEW.is_active) IS DISTINCT FROM (OLD.password_hash, OLD.login, OLD.is_active) THEN
+        NEW.session_stamp := gen_random_uuid();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION pgerp.auth_session_revoked()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF NEW.session_stamp = OLD.session_stamp THEN
+            RETURN NULL;
+        END IF;
+        IF NEW.password_hash IS DISTINCT FROM OLD.password_hash THEN
+            DELETE FROM pgerp.mcp_tokens WHERE user_id = NEW.id;
+        END IF;
+    END IF;
+    PERFORM pg_notify('erp_ui', json_build_object('revoked_users', json_build_array(OLD.login))::TEXT);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Текущее состояние вошедшего: нет строки — пользователь отключён или удалён
+CREATE FUNCTION pgerp.auth_session(p_login VARCHAR)
+RETURNS TABLE (stamp TEXT, user_roles VARCHAR[], must_change BOOLEAN) AS $$
+    SELECT u.session_stamp::TEXT,
+           ARRAY(SELECT r.role_name FROM pgerp.user_roles ur JOIN pgerp.roles r ON r.id = ur.role_id
+                 WHERE ur.user_id = u.id ORDER BY r.role_name)::VARCHAR[],
+           u.must_change_password
+    FROM pgerp.users u
+    WHERE u.login = lower(trim(p_login)) AND u.is_active;
+$$ LANGUAGE sql STABLE;
+
+-- Известный браузер: вызывает шлюз после удачного входа. Токен каждый раз новый, прежний удаляется
+CREATE FUNCTION pgerp.auth_device_remember(p_login VARCHAR, p_token TEXT, p_previous TEXT)
+RETURNS VOID AS $$
+BEGIN
+    DELETE FROM pgerp.auth_devices d
+    USING pgerp.users u
+    WHERE u.id = d.user_id AND u.login = p_login
+      AND d.token_hash = encode(sha256(convert_to(p_previous, 'UTF8')), 'hex');
+    DELETE FROM pgerp.auth_devices WHERE expires_at <= now();
+    INSERT INTO pgerp.auth_devices (token_hash, user_id, expires_at)
+    SELECT encode(sha256(convert_to(p_token, 'UTF8')), 'hex'), u.id, now() + INTERVAL '180 days'
+    FROM pgerp.users u
+    WHERE u.login = p_login;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Вход. Ошибка — в error_message, иначе логин и роли. До проверки пароля ответ не зависит от того, есть ли
+-- логин: ни текстом, ни языком (только язык запроса), ни блокировкой.
+CREATE FUNCTION pgerp.auth_login(p_login VARCHAR, p_password TEXT, p_lang VARCHAR DEFAULT NULL,
+                                 p_address TEXT DEFAULT NULL, p_device TEXT DEFAULT NULL)
 RETURNS TABLE (user_login VARCHAR, user_roles VARCHAR[], error_message TEXT) AS $$
 DECLARE
-    c_attempts CONSTANT INT      := 5;
-    c_lock     CONSTANT INTERVAL := '5 minutes';
-    v_user     pgerp.users%ROWTYPE;
+    c_attempts     CONSTANT INT      := 5;
+    c_attempts_all CONSTANT INT      := 50;
+    c_window       CONSTANT INTERVAL := '5 minutes';
+    v_login  TEXT := left(lower(trim(COALESCE(p_login, ''))), 100);
+    v_user   pgerp.users%ROWTYPE;
+    v_known  BOOLEAN;
+    v_bucket TEXT;
+    v_ok     BOOLEAN;
 BEGIN
     PERFORM set_config('pgerp.lang', COALESCE(pgerp.i18n_resolve(p_lang), ''), TRUE);
 
-    SELECT * INTO v_user FROM pgerp.users u WHERE u.login = lower(trim(p_login)) FOR UPDATE;
-    IF NOT FOUND THEN
-        -- Время ответа как у существующего логина: по нему нельзя подобрать логины
+    v_known := EXISTS (SELECT 1
+                       FROM pgerp.auth_devices d
+                       JOIN pgerp.users u ON u.id = d.user_id
+                       WHERE u.login = v_login AND d.expires_at > now()
+                         AND d.token_hash = encode(sha256(convert_to(p_device, 'UTF8')), 'hex'));
+    v_bucket := CASE WHEN v_known THEN 'device:' || encode(sha256(convert_to(p_device, 'UTF8')), 'hex')
+                     ELSE 'address:' || left(COALESCE(p_address, ''), 100) END;
+
+    -- Параллельные попытки одного источника идут по очереди, иначе они обходят счётчик
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_login || chr(10) || v_bucket, 0));
+    DELETE FROM pgerp.auth_failures f
+    WHERE f.id IN (SELECT o.id FROM pgerp.auth_failures o
+                   WHERE o.failed_at <= now() - c_window
+                   FOR UPDATE SKIP LOCKED);
+
+    IF (SELECT count(*) FROM pgerp.auth_failures f
+        WHERE f.login = v_login AND f.bucket = v_bucket AND f.failed_at > now() - c_window) >= c_attempts
+       OR (NOT v_known AND
+           (SELECT count(*) FROM pgerp.auth_failures f
+            WHERE f.login = v_login AND f.bucket LIKE 'address:%' AND f.failed_at > now() - c_window) >= c_attempts_all)
+    THEN
+        RETURN QUERY SELECT NULL::VARCHAR, NULL::VARCHAR[], pgerp.ui_t(
+            format('Too many failed sign-in attempts. Try again in %s min.', 5));
+        RETURN;
+    END IF;
+
+    SELECT * INTO v_user FROM pgerp.users u WHERE u.login = v_login;
+    IF FOUND THEN
+        v_ok := pgerp.auth_password_ok(p_password, v_user.password_hash);
+    ELSE
+        -- Время ответа как у существующего логина
         PERFORM pgerp.auth_hash(COALESCE(p_password, ''));
+        v_ok := FALSE;
+    END IF;
+
+    IF v_ok IS NOT TRUE THEN
+        INSERT INTO pgerp.auth_failures (login, bucket) VALUES (v_login, v_bucket);
         RETURN QUERY SELECT NULL::VARCHAR, NULL::VARCHAR[], pgerp.ui_t('Invalid login or password');
         RETURN;
     END IF;
+
+    -- Пароль верен: дальше язык и состояние пользователя уже не секрет
     IF v_user.lang IS NOT NULL THEN
         PERFORM set_config('pgerp.lang', v_user.lang, TRUE);
     END IF;
-
-    IF v_user.locked_until > now() THEN
-        RETURN QUERY SELECT NULL::VARCHAR, NULL::VARCHAR[], pgerp.ui_t(
-            format('Too many failed sign-in attempts. Try again in %s min.',
-                   ceil(extract(epoch FROM v_user.locked_until - now()) / 60)));
-        RETURN;
-    END IF;
-
-    IF NOT pgerp.auth_password_ok(p_password, v_user.password_hash) THEN
-        UPDATE pgerp.users u
-        SET failed_attempts = CASE WHEN u.failed_attempts + 1 >= c_attempts THEN 0 ELSE u.failed_attempts + 1 END,
-            locked_until    = CASE WHEN u.failed_attempts + 1 >= c_attempts THEN now() + c_lock END
-        WHERE u.id = v_user.id;
-        RETURN QUERY SELECT NULL::VARCHAR, NULL::VARCHAR[], pgerp.ui_t('Invalid login or password');
-        RETURN;
-    END IF;
-
     IF NOT v_user.is_active THEN
         RETURN QUERY SELECT NULL::VARCHAR, NULL::VARCHAR[],
             pgerp.ui_t('The account is disabled — contact the administrator');
         RETURN;
     END IF;
 
-    UPDATE pgerp.users u
-    SET failed_attempts = 0, locked_until = NULL, last_login_at = now()
-    WHERE u.id = v_user.id;
+    DELETE FROM pgerp.auth_failures f WHERE f.login = v_login AND f.bucket = v_bucket;
+    UPDATE pgerp.users u SET last_login_at = now() WHERE u.id = v_user.id;
 
     RETURN QUERY
     SELECT v_user.login,
            ARRAY(SELECT r.role_name FROM pgerp.user_roles ur JOIN pgerp.roles r ON r.id = ur.role_id
                  WHERE ur.user_id = v_user.id ORDER BY r.role_name)::VARCHAR[],
            NULL::TEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Сохранение карточки пользователя снимает блокировку: user_save записывает locked_until
+CREATE FUNCTION pgerp.auth_failures_clear()
+RETURNS TRIGGER AS $$
+BEGIN
+    DELETE FROM pgerp.auth_failures WHERE login = NEW.login;
+    RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1759,7 +2122,7 @@ RETURNS JSON AS $$
             -- Первый вход администратора: решения ещё не выбирались — клиент предложит установить
             'setup_required', pgerp.auth_is_admin(u.id)
                               AND NOT EXISTS (SELECT 1 FROM pgerp.settings WHERE key = 'solutions_setup')
-                              AND NOT EXISTS (SELECT 1 FROM pgerp.solutions WHERE NOT is_core)),
+                              AND NOT EXISTS (SELECT 1 FROM pgerp.solutions)),
         'languages', (SELECT json_agg(json_build_object('code', code, 'title', title) ORDER BY sort_order, code)
                       FROM pgerp.languages),
         'themes', (SELECT json_agg(json_build_object('code', code, 'title', pgerp.ui_t_exact(title))
@@ -1788,413 +2151,6 @@ RETURNS VARCHAR AS $$
     SELECT COALESCE(NULLIF(trim(full_name), ''), login) FROM pgerp.users WHERE id = pgerp.ui_user_id();
 $$ LANGUAGE sql STABLE;
 
--- ---------------------------------------------------------------------
--- Проверки, вызывающие функции (после функций)
--- ---------------------------------------------------------------------
-ALTER TABLE pgerp.form_components ADD CONSTRAINT form_components_component_type_check CHECK (((component_type)::text = ANY ((pgerp.ui_component_types())::text[])));
-
--- ---------------------------------------------------------------------
--- Представления
--- ---------------------------------------------------------------------
--- Действия, которые вызывает форма
-CREATE VIEW pgerp.form_actions AS
-SELECT form_name, action_event AS action_name
-FROM pgerp.form_components
-WHERE action_event IS NOT NULL
-UNION
-SELECT c.form_name, r.row_action
-FROM pgerp.form_components c
-JOIN pgerp.grid_row_actions r ON r.source_action = c.action_event
-WHERE c.component_type = 'grid'
-UNION
-SELECT form_name, cancel_action
-FROM pgerp.forms
-WHERE cancel_action IS NOT NULL;
-
--- Формы, которые открывает действие: ui_open_form('имя', ...) в коде его функции.
--- Имя формы, вычисляемое во время работы, сюда не попадает — такую форму выдают роли явно.
-CREATE VIEW pgerp.action_forms AS
--- prosrc — текст каталога с правилом сортировки "C": имя приводится к обычному
-SELECT DISTINCT a.action_name, m[1]::VARCHAR COLLATE "default" AS form_name
-FROM pgerp.ui_actions a
-JOIN pg_proc p ON p.oid = a.function_name::OID
-CROSS JOIN LATERAL regexp_matches(p.prosrc, 'ui_open_form\s*\(\s*''([a-z_][a-z0-9_]*)''', 'g') AS m
-WHERE EXISTS (SELECT 1 FROM pgerp.forms f WHERE f.form_name = m[1]);
-
-CREATE VIEW pgerp.users_v AS
-SELECT u.id, u.login, u.full_name,
-       (SELECT string_agg(pgerp.ui_t_exact(r.title), ', ' ORDER BY r.title)
-        FROM pgerp.user_roles ur JOIN pgerp.roles r ON r.id = ur.role_id
-        WHERE ur.user_id = u.id) AS roles,
-       pgerp.ui_t_exact(CASE WHEN NOT u.is_active          THEN 'Disabled'
-                             WHEN u.locked_until > now()   THEN 'Sign-in locked'
-                             WHEN u.must_change_password   THEN 'Must change password'
-                             ELSE 'Active' END) AS status,
-       to_char(u.last_login_at, 'DD.MM.YYYY HH24:MI') AS last_login,
-       u.last_login_at
-FROM pgerp.users u;
-
-CREATE VIEW pgerp.user_roles_v AS
-SELECT ur.id, ur.user_id, r.role_name, r.title
-FROM pgerp.user_roles ur
-JOIN pgerp.roles r ON r.id = ur.role_id;
-
--- Формы для выбора: "Папка / Заголовок"
-CREATE VIEW pgerp.forms_combo_v AS
-SELECT form_name, concat_ws(' / ', pgerp.ui_t_exact(folder), pgerp.ui_t_exact(title)) AS label
-FROM pgerp.forms;
-
-CREATE VIEW pgerp.roles_v AS
-SELECT r.id, r.role_name, pgerp.ui_t_exact(r.title) AS title,
-       (SELECT count(*) FROM pgerp.user_roles ur WHERE ur.role_id = r.id) AS users_count,
-       CASE WHEN r.role_name = 'admin' THEN pgerp.ui_t_exact('All forms')
-            ELSE (SELECT string_agg(pgerp.ui_t_exact(f.title), ', ' ORDER BY f.title)
-                  FROM pgerp.role_forms rf JOIN pgerp.forms f ON f.form_name = rf.form_name
-                  WHERE rf.role_id = r.id) END AS forms
-FROM pgerp.roles r;
-
-CREATE VIEW pgerp.role_forms_v AS
-SELECT rf.id, rf.role_id, rf.form_name, pgerp.ui_t_exact(f.title) AS title, pgerp.ui_t_exact(f.folder) AS folder
-FROM pgerp.role_forms rf
-JOIN pgerp.forms f ON f.form_name = rf.form_name;
-
-CREATE VIEW pgerp.roles_combo_v AS
-SELECT id, pgerp.ui_t_exact(title) AS title FROM pgerp.roles;
-
--- Метаданные и строковые литералы с кириллицей в коде функций схем public и pgerp
--- (сообщения ui_require, ui_message, шаблоны format()). Склеенные из частей тексты сюда
--- попадают частями — их обработчик переводит сам через ui_t().
-
--- Тексты без перевода на каждый язык, кроме исходного. id — устойчивый хеш языка и текста
-
-CREATE VIEW pgerp.target_languages_v AS
-SELECT code, title, sort_order FROM pgerp.languages WHERE NOT is_source;
-
--- ---------------------------------------------------------------------
--- Данные ядра: языки, темы, действия, формы, меню, роли, первый администратор, переводы
--- ---------------------------------------------------------------------
-INSERT INTO pgerp.languages (code, title, is_source, is_default, sort_order) VALUES
-    ('en', 'English', TRUE,  TRUE,  1),
-    ('ru', 'Русский', FALSE, FALSE, 2);
-
-INSERT INTO pgerp.themes (code, title, sort_order) VALUES
-    ('dark',  'Dark',  2),
-    ('light', 'Light', 1);
-
-INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
-    ('action_source',            'pgerp.ui_action_source',          'Source code of the action function',    TRUE,  FALSE),
-    ('form_close',               'pgerp.ui_form_close',             'Close the modal form',          FALSE, FALSE),
-    ('form_delete',              'pgerp.ui_form_delete',            'Delete form',                   TRUE,  FALSE),
-    ('form_get',                 'pgerp.ui_form_open',              'Form structure',                  TRUE,  TRUE),
-    ('form_list',                'pgerp.ui_form_list',              'List of forms and actions',           TRUE,  FALSE),
-    ('form_save',                'pgerp.ui_form_save',              'Save form',                 TRUE,  FALSE),
-    ('forms_combo',              'pgerp.forms_combo',               'List: forms',                    FALSE, FALSE),
-    ('menu_get',                 'pgerp.ui_menu_get',               'Application menu',                  TRUE,  TRUE),
-    ('menu_save',                'pgerp.ui_menu_save',              'Save menu',                  TRUE,  FALSE),
-    ('password_change',          'pgerp.ui_password_change',        'Change own password',              FALSE, TRUE),
-    ('password_change_cancel',   'pgerp.ui_password_change_cancel', 'Cancel password change',              FALSE, TRUE),
-    ('role_delete',              'pgerp.role_delete',               'Delete role',                    FALSE, FALSE),
-    ('role_edit_open',           'pgerp.role_edit_open',            'Role card',                    FALSE, FALSE),
-    ('role_form_add',            'pgerp.role_form_add',             'Add a form to a role',          FALSE, FALSE),
-    ('role_form_remove',         'pgerp.role_form_remove',          'Remove a form from a role',           FALSE, FALSE),
-    ('role_forms_page',          'pgerp.role_forms_page',           'Table: role forms',              FALSE, FALSE),
-    ('role_new_open',            'pgerp.role_new_open',             'New role',                       FALSE, FALSE),
-    ('role_save',                'pgerp.role_save',                 'Save role',                  FALSE, FALSE),
-    ('roles_combo',              'pgerp.roles_combo',               'List: roles',                     FALSE, FALSE),
-    ('roles_page',               'pgerp.roles_page',                'Table: roles',                    FALSE, FALSE),
-    ('session_get',              'pgerp.ui_session_get',            'Current user',             TRUE,  TRUE),
-    ('session_lang_set',         'pgerp.ui_session_lang_set',       'Change user language',         TRUE,  TRUE),
-    ('session_theme_set',        'pgerp.ui_session_theme_set',      'Change user theme',          TRUE,  TRUE),
-    ('target_languages_combo',   'pgerp.target_languages_combo',    'List: translation languages',           FALSE, FALSE),
-    ('translation_delete',       'pgerp.translation_delete',        'Delete translation',                FALSE, FALSE),
-    ('translation_edit_open',    'pgerp.translation_edit_open',     'Translation card',                FALSE, FALSE),
-    ('translation_missing_open', 'pgerp.translation_missing_open',  'Translate an untranslated text',      FALSE, FALSE),
-    ('translation_missing_page', 'pgerp.translation_missing_page',  'Table: untranslated texts',     FALSE, FALSE),
-    ('translation_new_open',     'pgerp.translation_new_open',      'New translation',                    FALSE, FALSE),
-    ('translation_save',         'pgerp.translation_save',          'Save translation',              FALSE, FALSE),
-    ('translations_page',        'pgerp.translations_page',         'Table: translations',                FALSE, FALSE),
-    ('user_edit_open',           'pgerp.user_edit_open',            'User card',            FALSE, FALSE),
-    ('user_new_open',            'pgerp.user_new_open',             'New user',               FALSE, FALSE),
-    ('user_role_add',            'pgerp.user_role_add',             'Assign a role to a user',     FALSE, FALSE),
-    ('user_role_remove',         'pgerp.user_role_remove',          'Remove a role from a user',       FALSE, FALSE),
-    ('user_roles_page',          'pgerp.user_roles_page',           'Table: user roles',       FALSE, FALSE),
-    ('user_save',                'pgerp.user_save',                 'Save user',          FALSE, FALSE),
-    ('user_states_combo',        'pgerp.user_states_combo',         'List: account statuses', FALSE, FALSE),
-    ('users_page',               'pgerp.users_page',                'Table: users',            FALSE, FALSE);
-
-INSERT INTO pgerp.forms (form_name, title, cancel_action, folder) VALUES
-    ('password_change', 'Password change', 'password_change_cancel', 'Administration'),
-    ('role',            'Role',         NULL,                     'Administration'),
-    ('roles',           'Roles',         NULL,                     'Administration'),
-    ('translation',     'Translation',      NULL,                     'Administration'),
-    ('translations',    'Translations',     NULL,                     'Administration'),
-    ('user',            'User', NULL,                     'Administration'),
-    ('users',           'Users', NULL,                     'Administration');
-
-INSERT INTO pgerp.form_components (form_name, sort_order, component_type, component_name, label, action_event, master_field, tab, options) VALUES
-    ('password_change', 1,  'label',    'hint',                     'The password must be at least 8 characters long.',                                                                                                                       NULL,                       NULL, NULL,             NULL),
-    ('password_change', 2,  'input',    'old_password',             'Current password',                                                                                                                                       NULL,                       NULL, NULL,             '{"type": "password"}'),
-    ('password_change', 3,  'input',    'new_password',             'New password',                                                                                                                                         NULL,                       NULL, NULL,             '{"type": "password"}'),
-    ('password_change', 4,  'input',    'new_password_repeat',      'Repeat password',                                                                                                                                        NULL,                       NULL, NULL,             '{"type": "password"}'),
-    ('password_change', 5,  'button',   'btn_change',               'Change password',                                                                                                                                       'password_change',          NULL, NULL,             NULL),
-    ('password_change', 6,  'button',   'btn_cancel',               'Cancel',                                                                                                                                               'password_change_cancel',   NULL, NULL,             NULL),
-    ('role',            1,  'hidden',   'id',                       NULL,                                                                                                                                                   NULL,                       NULL, NULL,             NULL),
-    ('role',            2,  'input',    'role_name',                'Code',                                                                                                                                                  NULL,                       NULL, NULL,             NULL),
-    ('role',            3,  'input',    'title',                    'Title',                                                                                                                                             NULL,                       NULL, NULL,             NULL),
-    ('role',            4,  'label',    'forms_hint',               'Users with this role see these forms in the menu and can run their actions. Forms opened from them (cards, selection windows) are available automatically.', NULL,                       NULL, NULL,             NULL),
-    ('role',            5,  'combobox', 'form_to_add',              'Form',                                                                                                                                                'forms_combo',              NULL, NULL,             NULL),
-    ('role',            6,  'button',   'btn_form_add',             'Add form',                                                                                                                                       'role_form_add',            NULL, NULL,             NULL),
-    ('role',            7,  'grid',     'role_forms_grid',          'Role forms',                                                                                                                                           'role_forms_page',          'id', NULL,             NULL),
-    ('role',            8,  'button',   'btn_save',                 'Save',                                                                                                                                            'role_save',                NULL, NULL,             NULL),
-    ('role',            9,  'button',   'btn_cancel',               'Close',                                                                                                                                              'form_close',               NULL, NULL,             NULL),
-    ('roles',           1,  'button',   'btn_role_new',             'New role',                                                                                                                                           'role_new_open',            NULL, NULL,             NULL),
-    ('roles',           2,  'grid',     'roles_grid',               'Roles',                                                                                                                                                 'roles_page',               NULL, NULL,             NULL),
-    ('translation',     1,  'hidden',   'id',                       NULL,                                                                                                                                                   NULL,                       NULL, NULL,             NULL),
-    ('translation',     2,  'combobox', 'lang',                     'Language',                                                                                                                                                 'target_languages_combo',   NULL, NULL,             '{"placeholder": "—"}'),
-    ('translation',     3,  'input',    'source',                   'Source text (Russian)',                                                                                                                             NULL,                       NULL, NULL,             NULL),
-    ('translation',     4,  'input',    'translation',              'Translation',                                                                                                                                              NULL,                       NULL, NULL,             NULL),
-    ('translation',     5,  'label',    'hint',                     'Placeholders: %s in the source text (or % in RAISE); in the translation, %s or %1$s, %2$s in the order of the source text.',                                       NULL,                       NULL, NULL,             NULL),
-    ('translation',     6,  'button',   'btn_save',                 'Save',                                                                                                                                            'translation_save',         NULL, NULL,             NULL),
-    ('translation',     7,  'button',   'btn_cancel',               'Close',                                                                                                                                              'form_close',               NULL, NULL,             NULL),
-    ('translations',    1,  'input',    'translation_filter',       'Source text contains',                                                                                                                              NULL,                       NULL, NULL,             '{"refresh": "translations_grid, translation_missing_grid"}'),
-    ('translations',    2,  'button',   'btn_translation_new',      'New translation',                                                                                                                                        'translation_new_open',     NULL, NULL,             NULL),
-    ('translations',    3,  'grid',     'translations_grid',        'Translations',                                                                                                                                             'translations_page',        NULL, 'Translations',       NULL),
-    ('translations',    4,  'grid',     'translation_missing_grid', 'Untranslated',                                                                                                                                         'translation_missing_page', NULL, 'Untranslated',   NULL),
-    ('user',            1,  'hidden',   'id',                       NULL,                                                                                                                                                   NULL,                       NULL, NULL,             NULL),
-    ('user',            2,  'input',    'login',                    'Login',                                                                                                                                                NULL,                       NULL, 'Account', NULL),
-    ('user',            3,  'input',    'full_name',                'Full name',                                                                                                                                                  NULL,                       NULL, 'Account', NULL),
-    ('user',            4,  'combobox', 'state',                    'Status',                                                                                                                                            'user_states_combo',        NULL, 'Account', '{"placeholder": "—"}'),
-    ('user',            5,  'input',    'password',                 'New password (leave empty to keep)',                                                                                                                     NULL,                       NULL, 'Account', '{"type": "password"}'),
-    ('user',            6,  'label',    'password_hint',            'The user will change this password at the next sign-in.',                                                                                             NULL,                       NULL, 'Account', NULL),
-    ('user',            7,  'combobox', 'role_to_add',              'Role',                                                                                                                                                 'roles_combo',              NULL, 'Roles',           NULL),
-    ('user',            8,  'button',   'btn_role_add',             'Assign role',                                                                                                                                       'user_role_add',            NULL, 'Roles',           NULL),
-    ('user',            9,  'grid',     'user_roles_grid',          'User roles',                                                                                                                                    'user_roles_page',          'id', 'Roles',           NULL),
-    ('user',            10, 'button',   'btn_save',                 'Save',                                                                                                                                            'user_save',                NULL, NULL,             NULL),
-    ('user',            11, 'button',   'btn_cancel',               'Close',                                                                                                                                              'form_close',               NULL, NULL,             NULL),
-    ('users',           1,  'input',    'user_filter',              'Login',                                                                                                                                                NULL,                       NULL, NULL,             '{"refresh": "users_grid"}'),
-    ('users',           2,  'button',   'btn_user_new',             'New user',                                                                                                                                   'user_new_open',            NULL, NULL,             NULL),
-    ('users',           3,  'grid',     'users_grid',               'Users',                                                                                                                                         'users_page',               NULL, NULL,             NULL);
-
-INSERT INTO pgerp.grid_columns (action_name, display_order, field_name, column_title, cell_type, sort_column) VALUES
-    ('role_forms_page',          1, 'title',       'Form',           'text',   'title'),
-    ('role_forms_page',          2, 'folder',      'Folder',           'text',   'folder'),
-    ('roles_page',               1, 'title',       'Title',        'text',   'title'),
-    ('roles_page',               2, 'role_name',   'Code',             'text',   'role_name'),
-    ('roles_page',               3, 'users_count', 'User count',   'number', 'users_count'),
-    ('roles_page',               4, 'forms',       'Forms',           'text',   NULL),
-    ('translation_missing_page', 1, 'lang',        'Language',            'text',   'lang'),
-    ('translation_missing_page', 2, 'source',      'Source text',  'text',   'source'),
-    ('translation_missing_page', 3, 'origin',      'Used in', 'text',   'origin'),
-    ('translations_page',        1, 'lang',        'Language',            'text',   'lang'),
-    ('translations_page',        2, 'source',      'Source text',  'text',   'source'),
-    ('translations_page',        3, 'translation', 'Translation',         'text',   'translation'),
-    ('user_roles_page',          1, 'title',       'Role',            'text',   'title'),
-    ('user_roles_page',          2, 'role_name',   'Code',             'text',   'role_name'),
-    ('users_page',               1, 'login',       'Login',           'text',   'login'),
-    ('users_page',               2, 'full_name',   'Full name',           'text',   'full_name'),
-    ('users_page',               3, 'roles',       'Roles',            'text',   NULL),
-    ('users_page',               4, 'status',      'Status',       'text',   'status'),
-    ('users_page',               5, 'last_login',  'Last sign-in',  'text',   'last_login_at');
-
-INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label, style) VALUES
-    ('role_forms_page',          1, 'role_form_remove',         'Remove',    'danger'),
-    ('roles_page',               1, 'role_edit_open',           'Edit',  'default'),
-    ('roles_page',               2, 'role_delete',              'Delete',   'danger'),
-    ('translation_missing_page', 1, 'translation_missing_open', 'Translate', 'default'),
-    ('translations_page',        1, 'translation_edit_open',    'Edit',  'default'),
-    ('translations_page',        2, 'translation_delete',       'Delete',   'danger'),
-    ('user_roles_page',          1, 'user_role_remove',         'Remove',    'danger'),
-    ('users_page',               1, 'user_edit_open',           'Edit',  'default');
-
-INSERT INTO pgerp.menu_items (id, parent_id, sort_order, title, form_name) VALUES
-    (17, NULL, 3, 'Administration', NULL),
-    (18, 17,   1, 'Users',      'users'),
-    (19, 17,   2, 'Roles',              'roles'),
-    (20, 17,   3, 'Translations',          'translations');
-
-INSERT INTO pgerp.roles (id, role_name, title) VALUES
-    (1, 'admin', 'Administrator');
-
--- Первый администратор: admin / admin, пароль нужно сменить при первом входе
-INSERT INTO pgerp.users (id, login, full_name, password_hash, must_change_password)
-VALUES (1, 'admin', 'Administrator', pgerp.auth_hash('admin'), TRUE);
-INSERT INTO pgerp.user_roles (user_id, role_id)
-SELECT u.id, r.id FROM pgerp.users u, pgerp.roles r WHERE u.login = 'admin' AND r.role_name = 'admin';
-
--- Переводы текстов ядра (164)
-INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'ui_push: the message exceeds 8000 bytes — send less data in it', 'ui_push: сообщение длиннее 8000 байт — передайте в нём меньше данных'),
-    ('ru', 'Administrator', 'Администратор'),
-    ('ru', 'The administrator has access to all forms', 'Администратору доступны все формы'),
-    ('ru', 'Administration', 'Администрирование'),
-    ('ru', 'Active', 'Активен'),
-    ('ru', 'Untranslated', 'Без перевода'),
-    ('ru', 'The source text has %s placeholders. Use %%s or %%1$s, %%2$s, … in the translation', 'В исходном тексте подстановок: %s. В переводе используйте %%s или %%1$s, %%2$s, …'),
-    ('ru', 'All forms', 'Все формы'),
-    ('ru', 'Sign-in locked', 'Вход заблокирован'),
-    ('ru', 'Select a role', 'Выберите роль'),
-    ('ru', 'Select the account status', 'Выберите состояние учётной записи'),
-    ('ru', 'Select a form', 'Выберите форму'),
-    ('ru', 'Select the translation language', 'Выберите язык перевода'),
-    ('ru', 'Drop-down list "%": select the item source action', 'Выпадающий список "%": выберите действие-источник элементов'),
-    ('ru', 'Used in', 'Где встречается'),
-    ('ru', 'Action "%" is not registered', 'Действие "%" не зарегистрировано'),
-    ('ru', 'Tree "%": select the data source action', 'Дерево "%": выберите действие-источник данных'),
-    ('ru', 'Add form', 'Добавить форму'),
-    ('ru', 'Add a form to a role', 'Добавление формы в роль'),
-    ('ru', 'At least one active administrator must remain', 'Должен остаться хотя бы один активный администратор'),
-    ('ru', 'Must change password', 'Должен сменить пароль'),
-    ('ru', 'Set a password — the user will change it at the first sign-in', 'Задайте пароль — пользователь сменит его при первом входе'),
-    ('ru', 'Close', 'Закрыть'),
-    ('ru', 'Close the modal form', 'Закрыть модальную форму'),
-    ('ru', 'Edit', 'Изменить'),
-    ('ru', 'Component names must be unique', 'Имена компонентов должны быть уникальны'),
-    ('ru', 'Full name', 'Имя'),
-    ('ru', 'Form name: lowercase Latin letters, digits and "_"', 'Имя формы: латинские буквы в нижнем регистре, цифры и "_"'),
-    ('ru', 'Source code of the action function', 'Исходный код функции действия'),
-    ('ru', 'Source text', 'Исходный текст'),
-    ('ru', 'Source text (Russian)', 'Исходный текст (русский)'),
-    ('ru', 'Source text contains', 'Исходный текст содержит'),
-    ('ru', 'Translation card', 'Карточка перевода'),
-    ('ru', 'User card', 'Карточка пользователя'),
-    ('ru', 'Role card', 'Карточка роли'),
-    ('ru', 'Code', 'Код'),
-    ('ru', 'The administrator role code cannot be changed', 'Код роли администратора менять нельзя'),
-    ('ru', 'Role code: lowercase Latin letters, digits and "_"', 'Код роли: латинские буквы в нижнем регистре, цифры и "_"'),
-    ('ru', 'Component "%": options must be a JSON object', 'Компонент "%": параметры должны быть объектом JSON'),
-    ('ru', 'Component "%s": action "%s" is not registered', 'Компонент "%s": действие "%s" не зарегистрировано'),
-    ('ru', 'Component No. %s: name must be lowercase Latin letters, digits and "_"', 'Компонент №%s: имя — латинские буквы в нижнем регистре, цифры и "_"'),
-    ('ru', 'Component No. %s: unknown type "%s"', 'Компонент №%s: неизвестный тип "%s"'),
-    ('ru', 'Login', 'Логин'),
-    ('ru', 'Login “%s” is already taken', 'Логин «%s» уже занят'),
-    ('ru', 'Login must be at most 50 characters long', 'Логин — не длиннее 50 символов'),
-    ('ru', 'Login: Latin letters, digits and _ . @ -, starting with a letter or digit', 'Логин: латинские буквы, цифры и символы _ . @ -, начинается с буквы или цифры'),
-    ('ru', 'Application menu', 'Меню приложения'),
-    ('ru', 'Menu saved', 'Меню сохранено'),
-    ('ru', 'Menu, %s: the title is longer than 200 characters', 'Меню, %s: название длиннее 200 символов'),
-    ('ru', 'Menu, %s: enter the item title', 'Меню, %s: укажите название пункта'),
-    ('ru', 'Menu, %s: form "%s" does not exist', 'Меню, %s: формы "%s" нет'),
-    ('ru', 'Menu: items must be passed as a list', 'Меню: пункты передаются списком'),
-    ('ru', 'Title', 'Название'),
-    ('ru', 'Assign a role to a user', 'Назначение роли пользователю'),
-    ('ru', 'Assign role', 'Назначить роль'),
-    ('ru', 'Invalid login or password', 'Неверный логин или пароль'),
-    ('ru', 'Unknown action: %s', 'Неизвестное действие: %s'),
-    ('ru', 'You cannot disable your own account', 'Нельзя отключить свою учётную запись'),
-    ('ru', 'Access denied to action “%s”', 'Нет доступа к действию «%s»'),
-    ('ru', 'Access denied to form “%s”', 'Нет доступа к форме «%s»'),
-    ('ru', 'New role', 'Новая роль'),
-    ('ru', 'New password', 'Новый пароль'),
-    ('ru', 'New password (leave empty to keep)', 'Новый пароль (пусто — не менять)'),
-    ('ru', 'The new password must differ from the current one', 'Новый пароль должен отличаться от текущего'),
-    ('ru', 'The new password and its repetition do not match', 'Новый пароль и повтор не совпадают'),
-    ('ru', 'New translation', 'Новый перевод'),
-    ('ru', 'New user', 'Новый пользователь'),
-    ('ru', 'Disabled', 'Отключён'),
-    ('ru', 'Cancel', 'Отмена'),
-    ('ru', 'Cancel password change', 'Отмена смены пароля'),
-    ('ru', 'Folder', 'Папка'),
-    ('ru', 'Password changed', 'Пароль изменён'),
-    ('ru', 'The password must not match the login', 'Пароль не должен совпадать с логином'),
-    ('ru', 'The password must be at most 72 characters long', 'Пароль — не длиннее 72 символов'),
-    ('ru', 'The password must be at least 8 characters long', 'Пароль — не короче 8 символов'),
-    ('ru', 'The password must be at least 8 characters long.', 'Пароль — не короче 8 символов.'),
-    ('ru', 'Translate', 'Перевести'),
-    ('ru', 'Translation', 'Перевод'),
-    ('ru', 'Translation not found — it may have been deleted', 'Перевод не найден — возможно, он удалён'),
-    ('ru', 'Translate an untranslated text', 'Перевод текста без перевода'),
-    ('ru', 'A translation of this text into this language already exists', 'Перевод этого текста на этот язык уже есть'),
-    ('ru', 'Translations', 'Переводы'),
-    ('ru', 'Repeat password', 'Повтор пароля'),
-    ('ru', 'Placeholders: %s in the source text (or % in RAISE); in the translation, %s or %1$s, %2$s in the order of the source text.', 'Подстановки: в исходном тексте %s (или % в RAISE), в переводе — %s или %1$s, %2$s по порядку исходного текста.'),
-    ('ru', 'Lookup field "%": select the action that opens the list', 'Поле выбора "%": выберите действие открытия списка'),
-    ('ru', 'User count', 'Пользователей'),
-    ('ru', 'Users', 'Пользователи'),
-    ('ru', 'Users with this role see these forms in the menu and can run their actions. Forms opened from them (cards, selection windows) are available automatically.', 'Пользователи роли видят эти формы в меню и выполняют их действия. Формы, которые открываются из них (карточки, окна выбора), доступны автоматически.'),
-    ('ru', 'User', 'Пользователь'),
-    ('ru', 'User not found', 'Пользователь не найден'),
-    ('ru', 'User not found — it may have been deleted', 'Пользователь не найден — возможно, он удалён'),
-    ('ru', 'The user will change this password at the next sign-in.', 'Пользователь сменит заданный пароль при следующем входе.'),
-    ('ru', 'User created. Assign roles on the “Roles” tab', 'Пользователь создан. Назначьте ему роли на вкладке «Роли»'),
-    ('ru', 'Last sign-in', 'Последний вход'),
-    ('ru', 'Roles', 'Роли'),
-    ('ru', 'User roles', 'Роли пользователя'),
-    ('ru', 'Role', 'Роль'),
-    ('ru', 'The administrator role cannot be deleted', 'Роль администратора удалить нельзя'),
-    ('ru', 'Role not found — it may have been deleted', 'Роль не найдена — возможно, она удалена'),
-    ('ru', 'A role with code “%s” already exists', 'Роль с кодом «%s» уже есть'),
-    ('ru', 'Role created. Add the forms it grants access to', 'Роль создана. Добавьте формы, к которым она даёт доступ'),
-    ('ru', 'Light', 'Светлая'),
-    ('ru', 'Session ended — please sign in again', 'Сеанс завершён — войдите снова'),
-    ('ru', 'Too many failed sign-in attempts. Try again in %s min.', 'Слишком много неудачных попыток входа. Повторите через %s мин.'),
-    ('ru', 'Password change', 'Смена пароля'),
-    ('ru', 'Change own password', 'Смена своего пароля'),
-    ('ru', 'Change user theme', 'Смена темы пользователя'),
-    ('ru', 'Change user language', 'Смена языка пользователя'),
-    ('ru', 'Change your password to continue', 'Смените пароль, чтобы продолжить работу'),
-    ('ru', 'Change password', 'Сменить пароль'),
-    ('ru', 'Save the user first', 'Сначала сохраните пользователя'),
-    ('ru', 'Save the role first', 'Сначала сохраните роль'),
-    ('ru', 'Remove a role from a user', 'Снятие роли с пользователя'),
-    ('ru', 'Status', 'Состояние'),
-    ('ru', 'Save menu', 'Сохранение меню'),
-    ('ru', 'Save translation', 'Сохранение перевода'),
-    ('ru', 'Save user', 'Сохранение пользователя'),
-    ('ru', 'Save role', 'Сохранение роли'),
-    ('ru', 'Save form', 'Сохранение формы'),
-    ('ru', 'Save', 'Сохранить'),
-    ('ru', 'List of forms and actions', 'Список форм и действий'),
-    ('ru', 'List: roles', 'Список: роли'),
-    ('ru', 'List: account statuses', 'Список: состояния учётной записи'),
-    ('ru', 'List: forms', 'Список: формы'),
-    ('ru', 'List: translation languages', 'Список: языки перевода'),
-    ('ru', 'Form structure', 'Структура формы'),
-    ('ru', 'Table "%": select the data source action', 'Таблица "%": выберите действие-источник данных'),
-    ('ru', 'Table "%s": master field "%s" not found among the form fields', 'Таблица "%s": поле-мастер "%s" не найдено среди полей формы'),
-    ('ru', 'Table: translations', 'Таблица: переводы'),
-    ('ru', 'Table: users', 'Таблица: пользователи'),
-    ('ru', 'Table: roles', 'Таблица: роли'),
-    ('ru', 'Table: user roles', 'Таблица: роли пользователя'),
-    ('ru', 'Table: untranslated texts', 'Таблица: тексты без перевода'),
-    ('ru', 'Table: role forms', 'Таблица: формы роли'),
-    ('ru', 'Timer "%": select an action', 'Таймер "%": выберите действие'),
-    ('ru', 'The text is already translated or no longer used', 'Текст уже переведён или больше не используется'),
-    ('ru', 'Current password', 'Текущий пароль'),
-    ('ru', 'The current password is incorrect', 'Текущий пароль указан неверно'),
-    ('ru', 'Current user', 'Текущий пользователь'),
-    ('ru', 'Theme “%s” is not supported', 'Тема «%s» не поддерживается'),
-    ('ru', 'Dark', 'Тёмная'),
-    ('ru', 'Remove', 'Убрать'),
-    ('ru', 'Delete translation', 'Удаление перевода'),
-    ('ru', 'Delete role', 'Удаление роли'),
-    ('ru', 'Delete form', 'Удаление формы'),
-    ('ru', 'Remove a form from a role', 'Удаление формы из роли'),
-    ('ru', 'Delete', 'Удалить'),
-    ('ru', 'Delete translation “%s”?', 'Удалить перевод «%s»?'),
-    ('ru', 'Delete role “%s”? Its users will lose access to its forms.', 'Удалить роль «%s»? Её пользователи потеряют доступ к её формам.'),
-    ('ru', 'Enter the source text', 'Укажите исходный текст'),
-    ('ru', 'Enter the role title', 'Укажите название роли'),
-    ('ru', 'Enter the translation', 'Укажите перевод'),
-    ('ru', 'Account', 'Учётная запись'),
-    ('ru', 'The account is disabled — contact the administrator', 'Учётная запись отключена — обратитесь к администратору'),
-    ('ru', 'Form', 'Форма'),
-    ('ru', 'Form "%" not found', 'Форма "%" не найдена'),
-    ('ru', 'Form "%s" not found', 'Форма "%s" не найдена'),
-    ('ru', 'Form "%s" saved', 'Форма "%s" сохранена'),
-    ('ru', 'Forms', 'Формы'),
-    ('ru', 'Role forms', 'Формы роли'),
-    ('ru', 'Language', 'Язык'),
-    ('ru', 'Language “%s” is not supported', 'Язык «%s» не поддерживается'),
-    ('ru', 'item No. %s', 'пункт №%s'),
-    ('ru', '—', '—');
-
-SELECT setval(pg_get_serial_sequence('pgerp.menu_items', 'id'), (SELECT max(id) FROM pgerp.menu_items));
-SELECT setval(pg_get_serial_sequence('pgerp.roles', 'id'), (SELECT max(id) FROM pgerp.roles));
-SELECT setval(pg_get_serial_sequence('pgerp.users', 'id'), (SELECT max(id) FROM pgerp.users));
-
--- #####################################################################
--- Редактор функций действий
--- #####################################################################
 -- =====================================================================
 -- Редактор функций действий (кнопка «{ }» у поля «Действие» в редакторе форм).
 --
@@ -2251,53 +2207,6 @@ BEGIN
     RETURN v_name;
 END;
 $$ LANGUAGE plpgsql STABLE;
-
--- Заготовки тел функций по типу компонента; handler — кнопка, таймер и остальные.
--- Подстановки: {name} — имя действия, {label} — подпись компонента, {label_literal} — она же строкой SQL,
--- {declare} — переменные для полей формы, {require} — проверка первого поля
-CREATE TABLE pgerp.function_templates (
-    component_type VARCHAR(20) PRIMARY KEY,
-    body           TEXT        NOT NULL
-);
-
-INSERT INTO pgerp.function_templates (component_type, body) VALUES
-('handler', $t$-- {label}: the values of all form fields arrive in p_data.
-{declare}BEGIN
-{require}    -- Change the data
-
-    RETURN ui_ok(ui_message('Done'));
-END;
-$t$),
-('grid', $t$-- Table source: a page of rows with sorting and search.
--- Columns and row buttons live in pgerp.grid_columns and pgerp.grid_row_actions for action '{name}';
--- without columns the table shows all row fields.
-BEGIN
-    RETURN ui_grid_page('{name}', p_data, 'my_table');  -- table or view
-END;
-$t$),
-('chart', $t$-- Chart source: {labels: [...], series: [{name, values: [...]}], format: number|money|percent}.
--- Receives the form field values (filters). The chart type is the component option "chart": bar, line, area, pie.
-BEGIN
-    RETURN ui_chart('my_view', 'label', ARRAY['value'], ARRAY['Value'], p_order_column => 'label');
-END;
-$t$),
-('tree', $t$-- Tree source: one level — children of node p_data->>'parent_id' (empty — roots).
-BEGIN
-    RETURN ui_tree_level(p_data, 'my_table');  -- table with columns id, parent_id, name
-END;
-$t$),
-('combobox', $t$-- Drop-down list items: {items: [{id, label}]}. Receives the form field values.
-BEGIN
-    RETURN ui_combo_items('my_table', 'name');  -- table and label column
-END;
-$t$),
-('lookup', $t$-- Lookup field: open a list form in selection mode; the selected row returns to the field.
-BEGIN
-    RETURN ui_ok(ui_open_form('my_list_form',
-        p_title  => {label_literal},
-        p_select => jsonb_build_object('value_field', 'id', 'display_field', 'name')));
-END;
-$t$);
 
 -- Заготовка тела функции для компонента: p_type — тип, p_fields — поля формы [{name, type, label}]
 CREATE FUNCTION pgerp.ui_function_template(p_name TEXT, p_type TEXT, p_label TEXT, p_fields JSON)
@@ -2422,6 +2331,8 @@ BEGIN
     PERFORM ui_require(NULLIF(trim(v_body), '') IS NOT NULL, 'Write the function code');
 
     IF v_is_new THEN
+        PERFORM ui_require(NOT pgerp.core_has('function', v_name),
+                           format('Function name “%s” is taken by the platform core — choose another name', v_name));
         PERFORM ui_require(NOT EXISTS (SELECT 1 FROM pgerp.ui_actions WHERE action_name = v_name),
                            format('Action “%s” already exists — choose another name', v_name));
         PERFORM ui_require(pgerp.app_action_fn(v_name) IS NULL,
@@ -2469,38 +2380,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system) VALUES
-    ('function_get',  'pgerp.ui_function_get',  'Action function code or a template for the editor', TRUE),
-    ('function_save', 'pgerp.ui_function_save', 'Save an action function from the editor',          TRUE);
-
-INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'Action function code or a template for the editor', 'Код функции действия или заготовка для редактора'),
-    ('ru', 'Save an action function from the editor', 'Сохранение функции действия из редактора'),
-    ('ru', 'A core function (pgerp schema) is changed only by migrations', 'Функция ядра (схема pgerp) меняется только миграциями'),
-    ('ru', 'Only action handlers can be edited: name(p_data JSON) RETURNS JSON', 'В редакторе правятся только обработчики действий: имя(p_data JSON) RETURNS JSON'),
-    ('ru', 'The editor does not support language %s', 'Язык %s не поддерживается редактором'),
-    ('ru', 'The function has special properties (SET, SECURITY DEFINER, STRICT) — change it with a migration', 'У функции есть особые свойства (SET, SECURITY DEFINER, STRICT) — измените её миграцией'),
-    ('ru', 'Action “%s” is not registered', 'Действие «%s» не зарегистрировано'),
-    ('ru', 'Function name: lowercase Latin letters, digits and "_", up to 63 characters', 'Имя функции: латинские буквы в нижнем регистре, цифры и "_", до 63 символов'),
-    ('ru', 'Function language: plpgsql or sql', 'Язык функции: plpgsql или sql'),
-    ('ru', 'Volatility: VOLATILE, STABLE or IMMUTABLE', 'Изменчивость: VOLATILE, STABLE или IMMUTABLE'),
-    ('ru', 'Write the function code', 'Напишите код функции'),
-    ('ru', 'Action “%s” already exists — choose another name', 'Действие «%s» уже есть — выберите другое имя'),
-    ('ru', 'Function %s(json) already exists — choose another name', 'Функция %s(json) уже есть — выберите другое имя'),
-    ('ru', 'The action calls a function with another name — change it with a migration', 'Действие вызывает функцию с другим именем — её правят миграцией'),
-    ('ru', 'Code error: %s', 'Ошибка в коде: %s'),
-    ('ru', 'Code error (line %s): %s', 'Ошибка в коде (строка %s): %s'),
-    ('ru', 'Fill in the “%s” field', 'Заполните поле «%s»'),
-    ('ru', 'Done', 'Готово'),
-    ('ru', 'Function “%s” saved', 'Функция «%s» сохранена')
-ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
-
--- #####################################################################
--- Окно сообщений: ui_print
--- #####################################################################
 -- =====================================================================
 -- Окно сообщений: ui_print
 -- =====================================================================
+
 -- Функция действия (и всё, что она вызывает: другие функции, триггеры) выводит текст в панель
 -- сообщений внизу экрана:
 --     PERFORM ui_print('Пересчитано позиций: ' || v_count);
@@ -2525,61 +2408,9 @@ $$ LANGUAGE plpgsql VOLATILE;
 
 COMMENT ON FUNCTION pgerp.ui_print(TEXT, VARCHAR) IS 'Report: text to the message panel at the bottom of the screen (info, warning, error)';
 
-INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'Unknown message kind: %s (allowed: info, warning, error)', 'Неизвестный вид сообщения: %s (допустимы info, warning, error)')
-ON CONFLICT DO NOTHING;
-
--- Заготовка обработчика в редакторе функций — с подсказкой про ui_print
-UPDATE pgerp.function_templates
-SET body = replace(body, E'    -- Change the data\n',
-                   E'    -- Change the data\n    -- PERFORM ui_print(''Text for the message panel'');  -- a line in the panel at the bottom of the screen\n')
-WHERE component_type = 'handler';
-
--- #####################################################################
--- Отчёты PDF
--- #####################################################################
 -- =====================================================================
 -- Отчёты PDF (JasperReports)
 -- =====================================================================
--- Шаблон отчёта (jrxml) хранится в базе вместе с функцией данных. Функция данных — обычная
--- функция действия fn(p_data JSON) RETURNS JSON; она получает параметры из ui_report и возвращает
--- JSON-объект: ключи верхнего уровня — параметры отчёта ($P{...}), массив rows — строки ($F{...}).
--- Тексты $R{...} в шаблоне переводятся по таблице переводов на язык пользователя.
---
--- Показ отчёта — инструкция из любого действия:
---     RETURN ui_ok(ui_report('my_app_invoice', jsonb_build_object('id', v_id)));
--- ui_report запоминает запрос (кто, какой отчёт, с какими параметрами) и возвращает инструкцию
--- show_report с адресом api/reports/<id>. Право на отчёт даёт само действие: по адресу отчёт
--- получит только тот же пользователь и только в течение часа. Шлюз берёт шаблон и данные
--- действием report_fill, заполняет отчёт JasperReports и отдаёт PDF; клиент показывает его в окне.
---
--- Редактор отчётов (editor.html?reports, только администратор): report_list, report_get,
--- report_save (шлюз сначала компилирует jrxml), report_delete, report_preview (данные для
--- предпросмотра несохранённого шаблона).
-
-CREATE TABLE pgerp.reports (
-    name          VARCHAR(63) PRIMARY KEY CHECK (name ~ '^[a-z_][a-z0-9_]*$'),
-    title         TEXT NOT NULL CHECK (title <> ''),
-    data_action   VARCHAR(100) REFERENCES pgerp.ui_actions(action_name) ON UPDATE CASCADE,
-    sample_params JSONB NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(sample_params) = 'object'),
-    jrxml         TEXT NOT NULL,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_by    VARCHAR(100)
-);
-
-COMMENT ON TABLE pgerp.reports IS 'PDF reports: JasperReports template (jrxml) and the action that supplies the data';
-COMMENT ON COLUMN pgerp.reports.sample_params IS 'Parameters for the preview in the editor, e.g. {"id": 1}';
-
--- Запросы на показ отчёта: адрес api/reports/<id> действует час и только для того, кто его получил
-CREATE TABLE pgerp.report_requests (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    login       VARCHAR(100) NOT NULL,
-    report_name VARCHAR(63) NOT NULL REFERENCES pgerp.reports(name) ON UPDATE CASCADE ON DELETE CASCADE,
-    params      JSONB NOT NULL,
-    title       TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX report_requests_created_at_idx ON pgerp.report_requests (created_at);
 
 -- Показать отчёт: инструкция show_report. p_params — параметры для функции данных,
 -- p_title — заголовок окна и имя файла вместо названия отчёта
@@ -2790,104 +2621,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Системные действия: без форм — только администратору. report_fill — всем вошедшим:
--- доступ проверяет запрос (тот же пользователь, не старше часа)
-INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
-    ('report_fill',    'pgerp.ui_report_fill',    'PDF report: template and data for a ui_report request', TRUE, TRUE),
-    ('report_preview', 'pgerp.ui_report_preview', 'PDF report: data for preview in the editor', TRUE, FALSE),
-    ('report_list',    'pgerp.ui_report_list',    'Report list for the editor',                    TRUE, FALSE),
-    ('report_get',     'pgerp.ui_report_get',     'Report for the editor or a new report template',        TRUE, FALSE),
-    ('report_save',    'pgerp.ui_report_save',    'Save a report from the editor',                  TRUE, FALSE),
-    ('report_delete',  'pgerp.ui_report_delete',  'Delete a report',                                 TRUE, FALSE);
-
--- Заготовка функции данных отчёта для редактора функций
-INSERT INTO pgerp.function_templates (component_type, body) VALUES
-('report', $t$-- Data of report "{label}". p_data holds the parameters from ui_report (or "Preview parameters").
--- Top-level keys are report parameters ($P{...}), the rows array holds report rows ($F{...}).
-BEGIN
-    RETURN json_build_object(
-        'title', {label_literal},
-        'rows', COALESCE((SELECT json_agg(r) FROM (
-            SELECT 'Sample row' AS name   -- query for the report rows
-        ) r), '[]'));
-END;
-$t$);
-
--- Тексты отчётов — в форме «Переводы»: названия и $R{...} из шаблонов
-CREATE VIEW pgerp.translatable_texts AS
-SELECT DISTINCT ON (source) source, origin
-FROM (
-    SELECT title AS source, 'Form' AS origin, 1 AS priority FROM pgerp.forms
-    UNION ALL SELECT folder, 'Form folder', 1 FROM pgerp.forms WHERE folder IS NOT NULL
-    UNION ALL SELECT label, 'Form component', 1 FROM pgerp.form_components WHERE label IS NOT NULL
-    UNION ALL SELECT tab, 'Form tab', 1 FROM pgerp.form_components WHERE tab IS NOT NULL
-    UNION ALL SELECT options->>'placeholder', 'Empty list item', 1 FROM pgerp.form_components
-              WHERE options->>'placeholder' IS NOT NULL
-    UNION ALL SELECT column_title, 'Table column', 1 FROM pgerp.grid_columns
-    UNION ALL SELECT label, 'Row button', 1 FROM pgerp.grid_row_actions
-    UNION ALL SELECT title, 'Menu', 1 FROM pgerp.menu_items
-    UNION ALL SELECT description, 'Action', 1 FROM pgerp.ui_actions WHERE description IS NOT NULL
-    UNION ALL SELECT title, 'Role', 1 FROM pgerp.roles
-    UNION ALL SELECT title, 'Report', 1 FROM pgerp.reports
-    UNION ALL
-    SELECT m[1], 'Report: ' || r.name, 1
-    FROM pgerp.reports r
-    CROSS JOIN LATERAL regexp_matches(r.jrxml, '\$R\{([^}]+)\}', 'g') AS m
-    UNION ALL
-    -- Строки кода с комментарием «-- no i18n» пропускаются: заголовки в файлах выпуска, сообщения протокола MCP
-    SELECT replace(m[1], '''''', ''''), 'Code: ' || p.proname, 2
-    FROM pg_proc p
-    CROSS JOIN LATERAL regexp_matches(regexp_replace(p.prosrc, '[^\n]*--[[:space:]]*no i18n[^\n]*', '', 'g'),
-                                      '''((?:[^'']|'''')*)''', 'g') AS m
-    WHERE p.pronamespace = ANY (pgerp.app_schema_oids() || 'pgerp'::regnamespace::OID)
-      AND m[1] ~ '^[[:upper:]][[:lower:]]'  -- похоже на фразу: с заглавной буквы, не идентификатор и не SQL
-
-) t
-WHERE trim(source) <> ''
-ORDER BY source, priority, origin;
-
--- Тексты без перевода на каждый язык, кроме исходного. id — устойчивый хеш языка и текста. Текст, который
--- переводится шаблоном (например «Заполните поле «Имя»» шаблоном «Заполните поле «%s»»), уже переведён
-CREATE VIEW pgerp.translation_missing_v AS
-SELECT ('x' || substr(md5(l.code || chr(1) || t.source), 1, 13))::BIT(52)::BIGINT AS id,
-       l.code AS lang, t.source, t.origin
-FROM pgerp.languages l
-CROSS JOIN pgerp.translatable_texts t
-WHERE NOT l.is_source
-  AND NOT EXISTS (SELECT 1 FROM pgerp.translations tr WHERE tr.lang = l.code AND tr.source = t.source)
-  AND NOT EXISTS (SELECT 1 FROM pgerp.translations tr
-                  WHERE tr.lang = l.code AND tr.is_template
-                    AND t.source ~ pgerp.i18n_template_regex(tr.source));
-
-INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'Report “%s” not found', 'Отчёт «%s» не найден'),
-    ('ru', 'A report can only be shown from a user action', 'Отчёт показывается только из действия пользователя'),
-    ('ru', 'The data function of report “%s” must return a JSON object', 'Функция данных отчёта «%s» должна вернуть JSON-объект'),
-    ('ru', 'The report has expired — open it again', 'Отчёт устарел — откройте его снова'),
-    ('ru', 'Preview parameters must be a JSON object, e.g. {"id": 1}', 'Параметры предпросмотра — JSON-объект, например {"id": 1}'),
-    ('ru', 'Report name: lowercase Latin letters, digits and _, up to 63 characters',
-           'Имя отчёта — латинские буквы в нижнем регистре, цифры и _, не длиннее 63 символов'),
-    ('ru', 'Enter the report title', 'Укажите название отчёта'),
-    ('ru', 'The report template is empty', 'Шаблон отчёта пуст'),
-    ('ru', 'Report “%s” already exists — choose another name', 'Отчёт «%s» уже есть — выберите другое имя'),
-    ('ru', 'Report “%s” saved', 'Отчёт «%s» сохранён'),
-    ('ru', 'Report “%s” deleted', 'Отчёт «%s» удалён'),
-    ('ru', 'PDF report: template and data for a ui_report request', 'Отчёт PDF: шаблон и данные по запросу ui_report'),
-    ('ru', 'PDF report: data for preview in the editor', 'Отчёт PDF: данные для предпросмотра в редакторе'),
-    ('ru', 'Report list for the editor', 'Список отчётов для редактора'),
-    ('ru', 'Report for the editor or a new report template', 'Отчёт для редактора или заготовка нового'),
-    ('ru', 'Save a report from the editor', 'Сохранение отчёта из редактора'),
-    ('ru', 'Delete a report', 'Удаление отчёта'),
-    ('ru', 'Page', 'Страница'),
-    ('ru', 'Sample row', 'Пример строки')
-ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
-
--- #####################################################################
--- Колонки таблиц в редакторе форм
--- #####################################################################
 -- =====================================================================
 -- Колонки таблиц в редакторе форм
 -- =====================================================================
+
 -- Колонки таблицы (pgerp.grid_columns) привязаны к действию-источнику данных, а не к форме:
 -- таблицы с одним источником в разных формах показывают одни и те же колонки.
 --  * grid_columns_get  {action} — колонки, поля, которые может показать источник, пример строк и формы,
@@ -3034,29 +2771,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
-    ('grid_columns_get',  'pgerp.ui_grid_columns_get',  'Table columns and source fields for the editor',  TRUE, FALSE),
-    ('grid_columns_save', 'pgerp.ui_grid_columns_save', 'Save table columns from the editor',         TRUE, FALSE);
-
-INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'Columns must be a list', 'Колонки передаются списком'),
-    ('ru', 'Column %s: the field must use lowercase Latin letters, digits and _', 'Колонка %s: поле — латинские буквы в нижнем регистре, цифры и _'),
-    ('ru', 'Column “%s”: the title must be 1 to 100 characters', 'Колонка «%s»: заголовок — от 1 до 100 символов'),
-    ('ru', 'Column “%s”: unknown format %s', 'Колонка «%s»: неизвестный формат %s'),
-    ('ru', 'The source data has no field “%s”', 'Поля «%s» нет в данных источника'),
-    ('ru', 'Column “%s”: you can only sort by a source field', 'Колонка «%s»: сортировать можно только по полю источника'),
-    ('ru', 'Each field can be used in one column only', 'Каждое поле — не больше одной колонки'),
-    ('ru', 'Table columns saved', 'Колонки таблицы сохранены'),
-    ('ru', 'Table columns and source fields for the editor', 'Колонки таблицы и поля источника для редактора'),
-    ('ru', 'Save table columns from the editor', 'Сохранение колонок таблицы из редактора')
-ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
-
--- #####################################################################
--- Фильтры таблиц
--- #####################################################################
 -- =====================================================================
 -- Фильтры таблицы по нескольким колонкам: ui_grid_page(..., p_filters)
 -- =====================================================================
+
 -- p_filters — {"колонка": значение, ...}: строки, у которых колонка равна значению. Пустые значения
 -- (NULL, '') пропускаются — фильтр «Все». Значение-массив — колонка равна любому из элементов.
 -- Имена колонок задаёт код функции-источника (как p_source и p_master_column), значения — пользователь:
@@ -3069,146 +2787,104 @@ ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
 COMMENT ON FUNCTION pgerp.ui_grid_page(VARCHAR, JSON, REGCLASS, VARCHAR, VARCHAR, VARCHAR, VARCHAR, TEXT, JSONB) IS
     'Table page: sorting, master, column search, p_filters {column: value}';
 
--- #####################################################################
--- Разработка решений: решения, схема данных, SQL-консоль, выпуски
--- #####################################################################
--- Решение — прикладной модуль: таблицы, представления, функции, формы, действия,
--- отчёты, роли и папка меню. Объект входит в решение, если его имя начинается с префикса
--- решения или он добавлен в решение явно (pgerp.solution_objects). Таблицы, представления и функции
--- решения лежат в его схеме базы (pgerp.solutions.db_schema) или в public; маршрутизатор ставит схемы
--- решений в путь поиска, поэтому код решений обращается к своим объектам без схемы. Объекты ядра
--- (схема pgerp, формы администрирования, роль admin) в решения не входят.
---
--- Пакет решения — папка db/solutions/<решение>/: solution.json (название, описание, схема по умолчанию)
--- и выпуски V<n>__<решение>_<название>.sql. Выпуск — разница между текущим состоянием решения и снимком
--- прошлого выпуска (первый — решение целиком), вызов pgerp.solution_release_apply(...) с SQL внутри: он
--- выполняется один раз на базу (на базе, где выпуск создан, он уже записан в pgerp.solution_releases).
--- Пакеты устанавливает и обновляет шлюз: администратор в редакторе или при первом входе, а при запуске
--- приложения — новые выпуски уже установленных решений.
---
--- Все действия этого раздела системные: только администратору (редактор и MCP).
-
 -- ---------------------------------------------------------------------
--- Решения и их состав
+-- Граница ядра и решений
+--
+-- Ядро — не решение. Его объекты в решения не входят, выпуском не меняются и с переустановкой решения не удаляются:
+--   * функции — всё, что есть в схеме pgerp; функция решения с таким именем недопустима: путь поиска ставит
+--     схемы решений раньше pgerp, и она подменила бы функцию ядра и для самого ядра;
+--   * формы, действия, отчёты, роли и папки меню ядра перечислены в core_objects (заполняется в конце миграции).
+-- Это защита от ошибок разработки, а не от администратора базы: владелец базы может изменить и саму проверку.
 -- ---------------------------------------------------------------------
-CREATE TABLE pgerp.solutions (
-    name             VARCHAR(50) PRIMARY KEY CHECK (name ~ '^[a-z][a-z0-9_]*$'),
-    title            VARCHAR(200) NOT NULL CHECK (trim(title) <> ''),
-    prefix           VARCHAR(30) UNIQUE CHECK (prefix ~ '^[a-z][a-z0-9_]*$'),
-    menu_folder      VARCHAR(200),
-    -- Папка пакета решения: db/solutions/<папка>/ (выпуски V<n>__….sql и solution.json)
-    migration_folder VARCHAR(100) NOT NULL CHECK (migration_folder ~ '^[a-z][a-z0-9_]*$'),
-    description      TEXT,
-    is_core          BOOLEAN NOT NULL DEFAULT FALSE,
-    -- Схема базы, в которой лежат таблицы, представления и функции решения
-    db_schema        VARCHAR(63) NOT NULL DEFAULT 'public'
-        CHECK (db_schema ~ '^[a-z_][a-z0-9_]*$' AND db_schema !~ '^pg_' AND db_schema <> 'pgerp'),
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 
--- Настройки установки: solutions_setup — администратор уже выбрал решения при первом входе
-CREATE TABLE pgerp.settings (
-    key        VARCHAR(100) PRIMARY KEY,
-    value      JSONB,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Объекты, добавленные в решение явно (без префикса или вопреки чужому префиксу)
-CREATE TABLE pgerp.solution_objects (
-    object_type VARCHAR(20) NOT NULL
-        CHECK (object_type IN ('table', 'view', 'sequence', 'function', 'type', 'form', 'action', 'report', 'role')),
-    object_name VARCHAR(100) NOT NULL,
-    solution    VARCHAR(50) NOT NULL REFERENCES pgerp.solutions(name) ON UPDATE CASCADE ON DELETE CASCADE,
-    PRIMARY KEY (object_type, object_name)
-);
-
--- Таблицы, строки которых переносятся выпуском (справочники, настройки, демо-данные)
-CREATE TABLE pgerp.solution_data (
-    table_name VARCHAR(63) PRIMARY KEY,
-    solution   VARCHAR(50) NOT NULL REFERENCES pgerp.solutions(name) ON UPDATE CASCADE ON DELETE CASCADE
-);
-
--- Выпуски: снимок решения на момент выпуска — основа для следующей разницы
-CREATE TABLE pgerp.solution_releases (
-    solution   VARCHAR(50) NOT NULL REFERENCES pgerp.solutions(name) ON UPDATE CASCADE ON DELETE CASCADE,
-    version    INT NOT NULL CHECK (version >= 0),
-    label      VARCHAR(200) NOT NULL,
-    file_name  VARCHAR(200),
-    script     TEXT,
-    snapshot   JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_by VARCHAR(50),
-    PRIMARY KEY (solution, version)
-);
-
--- Переименования из конструктора таблиц: выпуск переименует, а не удалит и создаст заново
-CREATE TABLE pgerp.solution_renames (
-    id         BIGSERIAL PRIMARY KEY,
-    kind       VARCHAR(10) NOT NULL CHECK (kind IN ('table', 'column')),
-    table_name VARCHAR(63) NOT NULL,
-    old_name   VARCHAR(63) NOT NULL,
-    new_name   VARCHAR(63) NOT NULL,
-    renamed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
-);
-
--- Все прикладные объекты: таблицы, представления, последовательности, функции и типы схем решений и public
--- (без объектов расширений и истории Flyway) и метаданные (формы, действия, отчёты, роли)
-CREATE VIEW pgerp.dev_catalog AS
-SELECT CASE WHEN c.relkind IN ('r', 'p') THEN 'table' WHEN c.relkind IN ('v', 'm') THEN 'view' ELSE 'sequence' END::VARCHAR AS object_type,
-       c.relname::VARCHAR AS object_name
-FROM pg_class c
-WHERE c.relnamespace = ANY (pgerp.app_schema_oids())
-  AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
-  AND NOT c.relispartition
-  AND c.relname <> 'flyway_schema_history'
-  AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
-  -- последовательности колонок (serial, identity) — часть своей таблицы
-  AND NOT (c.relkind = 'S' AND EXISTS (SELECT 1 FROM pg_depend d
-                                       WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
-                                         AND d.refobjsubid > 0 AND d.deptype IN ('a', 'i')))
-UNION
-SELECT 'function', p.proname::VARCHAR
-FROM pg_proc p
-WHERE p.pronamespace = ANY (pgerp.app_schema_oids())
-  AND p.prokind IN ('f', 'p')
-  AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                  WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
-UNION
-SELECT 'type', t.typname::VARCHAR
-FROM pg_type t
-WHERE t.typnamespace = ANY (pgerp.app_schema_oids())
-  AND t.typtype = 'e'
-  AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                  WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e')
-UNION
-SELECT 'form', form_name::VARCHAR FROM pgerp.forms
-UNION
-SELECT 'action', a.action_name::VARCHAR
-FROM pgerp.ui_actions a
-JOIN pg_proc p ON p.oid = a.function_name
-WHERE NOT a.is_system AND p.pronamespace <> 'pgerp'::regnamespace
-UNION
-SELECT 'report', name::VARCHAR FROM pgerp.reports
-UNION
-SELECT 'role', role_name::VARCHAR FROM pgerp.roles WHERE role_name <> 'admin';
-
--- Решение объекта: явное включение важнее префикса; из префиксов — самый длинный
-CREATE FUNCTION pgerp.solution_of(p_type VARCHAR, p_name VARCHAR)
-RETURNS VARCHAR AS $$
-    SELECT COALESCE(
-        (SELECT solution FROM pgerp.solution_objects WHERE object_type = p_type AND object_name = p_name),
-        (SELECT name FROM pgerp.solutions
-         WHERE prefix IS NOT NULL AND NOT is_core AND starts_with(p_name, prefix)
-         ORDER BY length(prefix) DESC
-         LIMIT 1));
+CREATE FUNCTION pgerp.core_has(p_type TEXT, p_name TEXT)
+RETURNS BOOLEAN AS $$
+    SELECT CASE WHEN p_type = 'function'
+        THEN EXISTS (SELECT 1 FROM pg_proc WHERE pronamespace = 'pgerp'::regnamespace AND proname = p_name)
+        ELSE EXISTS (SELECT 1 FROM pgerp.core_objects WHERE object_type = p_type AND object_name = p_name) END;
 $$ LANGUAGE sql STABLE;
 
-CREATE VIEW pgerp.dev_objects AS
-SELECT c.object_type, c.object_name, pgerp.solution_of(c.object_type, c.object_name) AS solution,
-       EXISTS (SELECT 1 FROM pgerp.solution_objects o
-               WHERE o.object_type = c.object_type AND o.object_name = c.object_name) AS is_explicit
-FROM pgerp.dev_catalog c;
+-- Состояние ядра и функции решений с именами ядра: снимается до чужого SQL и сравнивается после него
+CREATE FUNCTION pgerp.core_state(p_schema VARCHAR DEFAULT NULL)
+RETURNS JSONB AS $$
+    SELECT jsonb_build_object(
+        'core', md5(concat_ws(E'\n',
+            (SELECT string_agg(md5(p::TEXT), ',' ORDER BY p.oid) FROM pg_proc p WHERE p.pronamespace = 'pgerp'::regnamespace),
+            (SELECT string_agg(concat_ws(':', c.relname, c.relkind, a.attname, a.atttypid, a.attnotnull), ',' ORDER BY c.relname, a.attnum)
+             FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+             WHERE c.relnamespace = 'pgerp'::regnamespace AND c.relkind IN ('r', 'v', 'S')),
+            (SELECT string_agg(md5(r.ev_action::TEXT), ',' ORDER BY r.oid)
+             FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class WHERE c.relnamespace = 'pgerp'::regnamespace),
+            (SELECT string_agg(o.object_type || ':' || o.object_name, ',' ORDER BY o.object_type, o.object_name)
+             FROM pgerp.core_objects o),
+            (SELECT string_agg(concat_ws(':', a.action_name, a.function_name::OID, a.description, a.is_system, a.everyone), ','
+                               ORDER BY a.action_name)
+             FROM pgerp.ui_actions a WHERE pgerp.core_has('action', a.action_name)),
+            (SELECT string_agg((to_jsonb(f) - 'updated_at')::TEXT, ',' ORDER BY f.form_name)
+             FROM pgerp.forms f WHERE pgerp.core_has('form', f.form_name)),
+            (SELECT string_agg((to_jsonb(c) - 'id')::TEXT, ',' ORDER BY c.form_name, c.sort_order, c.component_name)
+             FROM pgerp.form_components c WHERE pgerp.core_has('form', c.form_name)),
+            (SELECT string_agg(r.role_name || ':' || r.title, ',' ORDER BY r.role_name)
+             FROM pgerp.roles r WHERE pgerp.core_has('role', r.role_name)))),
+        'shadows', COALESCE((
+            SELECT jsonb_agg(DISTINCT p.proname)
+            FROM pg_proc p
+            WHERE p.pronamespace = ANY (pgerp.app_schema_oids() || to_regnamespace(p_schema)::OID)
+              AND pgerp.core_has('function', p.proname)
+              AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                              WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')), '[]'));
+$$ LANGUAGE sql STABLE;
+
+CREATE FUNCTION pgerp.core_check(p_before JSONB, p_schema VARCHAR DEFAULT NULL)
+RETURNS VOID AS $$
+DECLARE
+    v_after JSONB;
+    v_name  TEXT;
+BEGIN
+    -- Прочитать заново: до этого выполнялся чужой SQL
+    v_after := pgerp.core_state(p_schema);
+    IF v_after->>'core' IS DISTINCT FROM p_before->>'core' THEN
+        RAISE EXCEPTION USING MESSAGE = pgerp.ui_t(
+            'The platform core is changed only by core migrations: solutions cannot change schema pgerp, core forms, actions and roles');
+    END IF;
+    SELECT n INTO v_name FROM jsonb_array_elements_text(v_after->'shadows') AS n WHERE NOT p_before->'shadows' ? n LIMIT 1;
+    IF v_name IS NOT NULL THEN
+        RAISE EXCEPTION USING MESSAGE = pgerp.ui_t(format('Function name “%s” is taken by the platform core — choose another name', v_name));
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION pgerp.core_not_in_solution()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF pgerp.core_has(NEW.object_type, NEW.object_name) THEN
+        RAISE EXCEPTION '%', format('“%s” belongs to the platform core and cannot be a part of a solution', NEW.object_name);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Папку меню решения удаляет его переустановка
+CREATE FUNCTION pgerp.core_menu_not_in_solution()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF pgerp.core_has('menu', NEW.menu_folder) THEN
+        RAISE EXCEPTION '%', format('Menu folder “%s” belongs to the platform core — choose another one', NEW.menu_folder);
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Решение объекта: явное включение важнее префикса; из префиксов — самый длинный. У объекта ядра решения нет
+CREATE FUNCTION pgerp.solution_of(p_type VARCHAR, p_name VARCHAR)
+RETURNS VARCHAR AS $$
+    SELECT CASE WHEN NOT pgerp.core_has(p_type, p_name) THEN COALESCE(
+        (SELECT solution FROM pgerp.solution_objects WHERE object_type = p_type AND object_name = p_name),
+        (SELECT name FROM pgerp.solutions
+         WHERE prefix IS NOT NULL AND starts_with(p_name, prefix)
+         ORDER BY length(prefix) DESC
+         LIMIT 1)) END;
+$$ LANGUAGE sql STABLE;
 
 -- Объекты решения
 CREATE FUNCTION pgerp.solution_members(p_solution VARCHAR, p_type VARCHAR)
@@ -3221,6 +2897,7 @@ $$ LANGUAGE sql STABLE;
 -- ---------------------------------------------------------------------
 -- Снимок решения: структура объектов и SQL метаданных — для разницы между выпусками
 -- ---------------------------------------------------------------------
+
 -- Определение без схемы объекта: «… ON my_app.my_app_items …» → «… ON my_app_items …» (первое вхождение после p_marker)
 CREATE FUNCTION pgerp.dev_unqualify(p_def TEXT, p_marker TEXT, p_object OID)
 RETURNS TEXT AS $$
@@ -3666,6 +3343,7 @@ $$ LANGUAGE plpgsql STABLE;
 -- ---------------------------------------------------------------------
 -- Скрипт выпуска: разница между снимками (без прежнего снимка — решение целиком)
 -- ---------------------------------------------------------------------
+
 -- Определение колонки для CREATE TABLE и ADD COLUMN
 CREATE FUNCTION pgerp.dev_column_sql(p_col JSONB)
 RETURNS TEXT AS $$
@@ -4093,6 +3771,7 @@ $$ LANGUAGE plpgsql STABLE;
 -- ---------------------------------------------------------------------
 -- Выпуски
 -- ---------------------------------------------------------------------
+
 -- Следующая версия выпуска решения: номера у каждого решения свои (файлы пакета db/solutions/<папка>/V<n>__…)
 CREATE FUNCTION pgerp.solution_next_version(p_solution VARCHAR)
 RETURNS INT AS $$
@@ -4100,6 +3779,13 @@ RETURNS INT AS $$
 $$ LANGUAGE sql STABLE;
 
 -- Схема решения; решения нет — public
+-- Идёт выпуск решения: его данные — не действия пользователя. Триггеры журналов и уведомлений решения
+-- пропускают их: CREATE TRIGGER … WHEN (NOT ui_in_release())
+CREATE FUNCTION pgerp.ui_in_release()
+RETURNS BOOLEAN AS $$
+    SELECT COALESCE(current_setting('pgerp.release', TRUE), '') <> '';
+$$ LANGUAGE sql STABLE;
+
 CREATE FUNCTION pgerp.solution_schema(p_solution VARCHAR)
 RETURNS VARCHAR AS $$
     SELECT COALESCE((SELECT db_schema FROM pgerp.solutions WHERE name = p_solution), 'public');
@@ -4130,6 +3816,7 @@ RETURNS VOID AS $$
 DECLARE
     v_schema VARCHAR := COALESCE((SELECT db_schema FROM pgerp.solutions WHERE name = p_solution),
                                  NULLIF(current_setting('pgerp.install_schema', TRUE), ''), 'public');
+    v_core   JSONB;
 BEGIN
     IF EXISTS (SELECT 1 FROM pgerp.solution_releases WHERE solution = p_solution AND version = p_version) THEN
         RAISE NOTICE 'Release % of solution % is already in this database — skipped', p_version, p_solution;
@@ -4141,7 +3828,11 @@ BEGIN
     PERFORM set_config('search_path', format('%I, ', v_schema) || pgerp.app_search_path(), TRUE);
     -- Функции ссылаются друг на друга и на представления, создаваемые ниже в том же выпуске
     PERFORM set_config('check_function_bodies', 'off', TRUE);
+    v_core := pgerp.core_state(v_schema);
+    PERFORM set_config('pgerp.release', p_solution, TRUE);
     EXECUTE p_script;
+    PERFORM set_config('pgerp.release', '', TRUE);
+    PERFORM pgerp.core_check(v_core, v_schema);
     UPDATE pgerp.solutions SET db_schema = v_schema WHERE name = p_solution;
     PERFORM set_config('search_path', pgerp.app_search_path(), TRUE);
     INSERT INTO pgerp.solution_releases (solution, version, label, snapshot, created_by)
@@ -4165,7 +3856,6 @@ DECLARE
 BEGIN
     SELECT * INTO v_s FROM pgerp.solutions WHERE name = p_solution;
     PERFORM ui_require(FOUND, format('Solution “%s” not found', p_solution));
-    PERFORM ui_require(NOT v_s.is_core, 'The platform core is released through core migrations, not from the editor');
 
     SELECT * INTO v_last FROM pgerp.solution_releases WHERE solution = p_solution ORDER BY version DESC LIMIT 1;
     v_state := pgerp.solution_state(p_solution);
@@ -4210,32 +3900,55 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE;
 
-
 -- ---------------------------------------------------------------------
 -- Установка пакетов решений (вызывает шлюз: редактор, окно первого входа, обновление при запуске)
 -- ---------------------------------------------------------------------
+
 -- Начало установки или обновления: p_login — администратор (NULL — обновление при запуске приложения),
 -- p_schema — схема нового решения (по умолчанию — из solution.json, иначе имя решения). Возвращает
 -- установленную версию (0 — не установлено): шлюз выполняет файлы пакета с номерами больше неё.
--- p_reset — чистая установка: решение и его схема удаляются перед установкой (pgerp.solution_reset)
+-- p_reset — чистая установка: решение и его схема удаляются перед установкой (pgerp.solution_reset). Схему
+-- с содержимым удаляет, только если это схема самого установленного решения: чужие данные не удаляются.
+-- Пока пароль не сменён, решения не ставятся: установка идёт мимо маршрутизатора handle_ui_event
 CREATE FUNCTION pgerp.solution_install_begin(p_login VARCHAR, p_solution VARCHAR, p_schema VARCHAR,
                                              p_reset BOOLEAN DEFAULT FALSE)
 RETURNS INT AS $$
 DECLARE
-    v_user_id BIGINT;
-    v_schema  VARCHAR := lower(trim(COALESCE(p_schema, '')));
+    v_user   pgerp.users%ROWTYPE;
+    v_schema VARCHAR := lower(trim(COALESCE(p_schema, '')));
+    v_target VARCHAR;
 BEGIN
     IF p_login IS NOT NULL THEN
-        SELECT id INTO v_user_id FROM pgerp.users WHERE login = p_login AND is_active;
-        IF v_user_id IS NULL OR NOT pgerp.auth_is_admin(v_user_id) THEN
+        SELECT * INTO v_user FROM pgerp.users WHERE login = p_login AND is_active;
+        -- Маршрутизатора здесь нет — язык ошибок задаём сами
+        IF v_user.lang IS NOT NULL THEN
+            PERFORM set_config('pgerp.lang', v_user.lang, TRUE);
+        END IF;
+        IF v_user.id IS NULL OR NOT pgerp.auth_is_admin(v_user.id) THEN
             RAISE EXCEPTION USING ERRCODE = 'U0003', MESSAGE = pgerp.ui_t('Only an administrator can install solutions');
+        END IF;
+        IF v_user.must_change_password THEN
+            RAISE EXCEPTION USING ERRCODE = 'U0003', MESSAGE = pgerp.ui_t('Change your password to continue');
         END IF;
         PERFORM set_config('pgerp.user', p_login, TRUE);
     END IF;
-    PERFORM ui_require(p_solution ~ '^[a-z][a-z0-9_]*$' AND p_solution <> 'core', format('Invalid solution name: %s', p_solution));
+    PERFORM ui_require(p_solution ~ '^[a-z][a-z0-9_]*$' AND p_solution NOT IN ('core', 'pgerp'), format('Invalid solution name: %s', p_solution));
     IF p_reset THEN
         PERFORM ui_require(p_login IS NOT NULL, 'A clean installation is started only by an administrator');
-        PERFORM pgerp.solution_reset(p_solution, COALESCE(NULLIF(v_schema, ''), p_solution));
+        v_target := COALESCE(NULLIF(v_schema, ''), p_solution);
+        -- В public solution_reset удаляет только объекты установленного решения. В остальных схемах
+        -- pg_depend видит любое содержимое: таблицы, функции, типы, расширения
+        IF v_target <> 'public' AND NOT EXISTS (SELECT 1 FROM pgerp.solutions WHERE name = p_solution) THEN
+            IF EXISTS (SELECT 1
+                       FROM pg_depend d
+                       JOIN pg_namespace n ON n.oid = d.refobjid
+                       WHERE d.refclassid = 'pg_namespace'::regclass AND n.nspname = v_target) THEN
+                RAISE EXCEPTION USING MESSAGE = pgerp.ui_t(format(
+                    'Schema “%s” is not empty and does not belong to solution “%s”: choose another schema or drop it manually',
+                    v_target, p_solution));
+            END IF;
+        END IF;
+        PERFORM pgerp.solution_reset(p_solution, v_target);
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pgerp.solutions WHERE name = p_solution) THEN
         v_schema := COALESCE(NULLIF(v_schema, ''), p_solution);
@@ -4261,7 +3974,6 @@ DECLARE
 BEGIN
     SELECT * INTO v_s FROM pgerp.solutions WHERE name = p_solution;
     IF FOUND THEN
-        PERFORM ui_require(NOT v_s.is_core, 'The platform core cannot be reinstalled');
         v_schema := v_s.db_schema;
         -- Состав решения — до удаления схемы: действия решения узнаются по его функциям
         v_actions := ARRAY(SELECT pgerp.solution_members(p_solution, 'action'));
@@ -4325,8 +4037,7 @@ RETURNS JSON AS $$
     SELECT COALESCE(json_object_agg(s.name, json_build_object(
                'title', s.title, 'db_schema', s.db_schema,
                'version', (SELECT max(version) FROM pgerp.solution_releases r WHERE r.solution = s.name))), '{}')
-    FROM pgerp.solutions s
-    WHERE NOT s.is_core;
+    FROM pgerp.solutions s;
 $$ LANGUAGE sql STABLE;
 
 -- solutions_setup_done: {} — администратор выбрал решения при первом входе (окно больше не показывается)
@@ -4342,11 +4053,12 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Действия: решения
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION pgerp.solution_json(p_s pgerp.solutions)
 RETURNS JSONB AS $$
     SELECT jsonb_build_object(
         'name', p_s.name, 'title', p_s.title, 'prefix', p_s.prefix, 'menu_folder', p_s.menu_folder,
-        'migration_folder', p_s.migration_folder, 'description', p_s.description, 'is_core', p_s.is_core,
+        'migration_folder', p_s.migration_folder, 'description', p_s.description,
         'db_schema', p_s.db_schema,
         'installed_version', (SELECT max(version) FROM pgerp.solution_releases WHERE solution = p_s.name),
         'counts', (SELECT COALESCE(jsonb_object_agg(object_type, n), '{}')
@@ -4362,7 +4074,7 @@ RETURNS JSON AS $$
         'status', 'success',
         'solutions', COALESCE((SELECT jsonb_agg(pgerp.solution_json(s)
                                                 || jsonb_build_object('title', pgerp.ui_t_exact(s.title))
-                                                ORDER BY s.is_core, s.title)
+                                                ORDER BY s.title)
                                FROM pgerp.solutions s), '[]'),
         'unassigned', (SELECT count(*) FROM pgerp.dev_objects WHERE solution IS NULL));
 $$ LANGUAGE sql STABLE;
@@ -4381,7 +4093,7 @@ BEGIN
         'status', 'success',
         'solution', CASE WHEN v_s.name IS NULL
             THEN jsonb_build_object('is_new', TRUE, 'name', '', 'title', '', 'prefix', NULL, 'menu_folder', NULL,
-                                    'migration_folder', NULL, 'description', NULL, 'is_core', FALSE, 'db_schema', NULL)
+                                    'migration_folder', NULL, 'description', NULL, 'db_schema', NULL)
             ELSE pgerp.solution_json(v_s) || jsonb_build_object('is_new', FALSE) END,
         'objects', COALESCE((SELECT jsonb_agg(jsonb_build_object(
                                  'type', o.object_type, 'name', o.object_name, 'explicit', o.is_explicit,
@@ -4418,6 +4130,7 @@ BEGIN
                        'Prefix: lowercase Latin letters, digits and _, for example my_app_');
     PERFORM ui_require(v_folder ~ '^[a-z][a-z0-9_]*$', 'Package folder: lowercase Latin letters, digits and _');
     PERFORM ui_require(v_folder <> 'core', 'The core folder belongs to the core; choose another one');
+    PERFORM ui_require(v_name NOT IN ('core', 'pgerp'), format('Invalid solution name: %s', v_name));
     PERFORM ui_require(v_prefix IS NULL OR NOT EXISTS (SELECT 1 FROM pgerp.solutions WHERE prefix = v_prefix AND name <> v_name),
                        format('Prefix %s already belongs to another solution', v_prefix));
 
@@ -4430,8 +4143,6 @@ BEGIN
         INSERT INTO pgerp.solutions (name, title, prefix, menu_folder, migration_folder, description, db_schema)
         VALUES (v_name, v_title, v_prefix, ui_text(p_data, 'menu_folder'), v_folder, ui_text(p_data, 'description'), v_schema);
     ELSE
-        PERFORM ui_require(NOT COALESCE((SELECT is_core FROM pgerp.solutions WHERE name = v_name), FALSE),
-                           'The platform core cannot be changed in the editor');
         UPDATE pgerp.solutions
         SET title = v_title, prefix = v_prefix, menu_folder = ui_text(p_data, 'menu_folder'),
             migration_folder = v_folder, description = ui_text(p_data, 'description')
@@ -4446,8 +4157,6 @@ $$ LANGUAGE plpgsql;
 CREATE FUNCTION pgerp.ui_solution_delete(p_data JSON)
 RETURNS JSON AS $$
 BEGIN
-    PERFORM ui_require(NOT COALESCE((SELECT is_core FROM pgerp.solutions WHERE name = p_data->>'name'), FALSE),
-                       'The platform core cannot be changed in the editor');
     -- Своя схема с объектами выпала бы из пути поиска — код решения перестал бы работать
     PERFORM ui_require(NOT EXISTS (SELECT 1 FROM pgerp.solutions s JOIN pg_class c ON c.relnamespace = to_regnamespace(s.db_schema)
                                    WHERE s.name = p_data->>'name' AND s.db_schema <> 'public'),
@@ -4466,12 +4175,14 @@ DECLARE
     v_name     TEXT := p_data->>'name';
     v_solution TEXT := ui_text(p_data, 'solution');
 BEGIN
+    PERFORM ui_require(NOT pgerp.core_has(v_type, v_name),
+                       format('“%s” belongs to the platform core and cannot be a part of a solution', v_name));
     PERFORM ui_require(EXISTS (SELECT 1 FROM pgerp.dev_catalog WHERE object_type = v_type AND object_name = v_name),
                        format('There is no %s “%s”', v_type, v_name));
     IF v_solution IS NULL THEN
         DELETE FROM pgerp.solution_objects WHERE object_type = v_type AND object_name = v_name;
     ELSE
-        PERFORM ui_require(EXISTS (SELECT 1 FROM pgerp.solutions WHERE name = v_solution AND NOT is_core),
+        PERFORM ui_require(EXISTS (SELECT 1 FROM pgerp.solutions WHERE name = v_solution),
                            format('Solution “%s” not found', v_solution));
         INSERT INTO pgerp.solution_objects (object_type, object_name, solution) VALUES (v_type, v_name, v_solution)
         ON CONFLICT (object_type, object_name) DO UPDATE SET solution = EXCLUDED.solution;
@@ -4571,6 +4282,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Схема данных: просмотр, конструктор таблиц, представления, удаление объектов
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION pgerp.dev_ident(p_name TEXT, p_what TEXT)
 RETURNS TEXT AS $$
 BEGIN
@@ -4752,7 +4464,8 @@ CREATE FUNCTION pgerp.dev_assign(p_type TEXT, p_name TEXT, p_solution TEXT)
 RETURNS VOID AS $$
 BEGIN
     IF p_solution IS NOT NULL AND pgerp.solution_of(p_type, p_name) IS DISTINCT FROM p_solution
-       AND EXISTS (SELECT 1 FROM pgerp.solutions WHERE name = p_solution AND NOT is_core) THEN
+       AND NOT pgerp.core_has(p_type, p_name)
+       AND EXISTS (SELECT 1 FROM pgerp.solutions WHERE name = p_solution) THEN
         INSERT INTO pgerp.solution_objects (object_type, object_name, solution) VALUES (p_type, p_name, p_solution)
         ON CONFLICT (object_type, object_name) DO UPDATE SET solution = EXCLUDED.solution;
     END IF;
@@ -5152,6 +4865,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- SQL-консоль и проверка действий
 -- ---------------------------------------------------------------------
+
 -- sql_run: {"sql", "rollback", "max_rows"} — запрос или скрипт от имени базы (только администратору).
 -- Запрос, возвращающий строки, — колонки и строки (не больше max_rows); иначе — число затронутых строк.
 -- rollback — выполнить и откатить. Ошибка запроса — в поле error, а не исключением
@@ -5177,6 +4891,7 @@ DECLARE
     v_context  TEXT;
     v_user     TEXT    := current_setting('pgerp.user', TRUE);
     v_lang     TEXT    := current_setting('pgerp.lang', TRUE);
+    v_core     JSONB   := pgerp.core_state();
 BEGIN
     PERFORM ui_require(NULLIF(trim(COALESCE(v_sql, '')), '') IS NOT NULL, 'Write a query');
     PERFORM set_config('statement_timeout', '60s', TRUE);
@@ -5208,6 +4923,7 @@ BEGIN
             EXECUTE v_sql;
             GET DIAGNOSTICS v_count = ROW_COUNT;
         END;
+        PERFORM pgerp.core_check(v_core);
         IF v_rollback THEN
             RAISE EXCEPTION USING ERRCODE = 'U0099', MESSAGE = 'rollback';
         END IF;
@@ -5281,238 +4997,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ---------------------------------------------------------------------
--- Действия
--- ---------------------------------------------------------------------
-INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
-    ('solution_list',       'pgerp.ui_solution_list',       'Solutions: list',                              TRUE, FALSE),
-    ('solution_get',        'pgerp.ui_solution_get',        'Solution: contents and releases',                    TRUE, FALSE),
-    ('solution_save',       'pgerp.ui_solution_save',       'Solution: save',                          TRUE, FALSE),
-    ('solution_delete',     'pgerp.ui_solution_delete',     'Solution: delete (objects remain)',         TRUE, FALSE),
-    ('solution_object_set', 'pgerp.ui_solution_object_set', 'Solution: add an object explicitly',             TRUE, FALSE),
-    ('solution_data_set',   'pgerp.ui_solution_data_set',   'Solution: carry table rows in a release',     TRUE, FALSE),
-    ('release_preview',     'pgerp.ui_release_preview',     'Release: changes and migration text',           TRUE, FALSE),
-    ('release_create',      'pgerp.ui_release_create',      'Release: create',                             TRUE, FALSE),
-    ('release_get',         'pgerp.ui_release_get',         'Release: migration text',                       TRUE, FALSE),
-    ('release_delete',      'pgerp.ui_release_delete',      'Release: cancel the last one',                    TRUE, FALSE),
-    ('schema_get',          'pgerp.ui_schema_get',          'Data schema: tables, views, functions', TRUE, FALSE),
-    ('table_get',           'pgerp.ui_table_get',           'Data schema: table structure',              TRUE, FALSE),
-    ('table_save',          'pgerp.ui_table_save',          'Data schema: create and alter a table',   TRUE, FALSE),
-    ('view_get',            'pgerp.ui_view_get',            'Data schema: view query',           TRUE, FALSE),
-    ('view_save',           'pgerp.ui_view_save',           'Data schema: save a view',       TRUE, FALSE),
-    ('function_source',     'pgerp.ui_function_source',     'Data schema: function source',                    TRUE, FALSE),
-    ('object_drop',         'pgerp.ui_object_drop',         'Data schema: delete an object',               TRUE, FALSE),
-    ('sql_run',             'pgerp.ui_sql_run',             'SQL console: run a query',              TRUE, FALSE),
-    ('action_run',          'pgerp.ui_action_run',          'SQL console: test an action',               TRUE, FALSE),
-    ('solutions_setup_done', 'pgerp.ui_solutions_setup_done', 'Solutions: first sign-in choice completed',   TRUE, FALSE);
-
--- ---------------------------------------------------------------------
--- Решение «Ядро платформы»: формы администрирования (объекты схемы pgerp в решения не входят)
--- ---------------------------------------------------------------------
-INSERT INTO pgerp.solutions (name, title, migration_folder, is_core, description) VALUES
-    ('core', 'Platform core', 'core', TRUE, 'Schema pgerp, administration forms and the admin role. Changed only by core migrations');
-INSERT INTO pgerp.solution_objects (object_type, object_name, solution)
-SELECT 'form', form_name, 'core' FROM pgerp.forms
-WHERE form_name IN ('password_change', 'role', 'roles', 'translation', 'translations', 'user', 'users');
-
--- ---------------------------------------------------------------------
--- Переводы: сообщения решений, схемы данных, консоли и выпусков, изменения выпуска, описания действий
--- ---------------------------------------------------------------------
-INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'Solution “%s” not found', 'Решение «%s» не найдено'),
-    ('ru', 'Table %s renamed to %s', 'Таблица %s переименована в %s'),
-    ('ru', 'Column %s.%s renamed to %s', 'Колонка %s.%s переименована в %s'),
-    ('ru', 'New type %s', 'Новый тип %s'),
-    ('ru', 'Changed type %s', 'Изменён тип %s'),
-    ('ru', 'Values were removed from type %s — the release does not delete them, do it manually', 'Из типа %s убраны значения — выпуск их не удаляет, это делается вручную'),
-    ('ru', 'Deleted type %s', 'Удалён тип %s'),
-    ('ru', 'New sequence %s', 'Новая последовательность %s'),
-    ('ru', 'Deleted sequence %s', 'Удалена последовательность %s'),
-    ('ru', 'New table %s', 'Новая таблица %s'),
-    ('ru', 'New column %s.%s', 'Новая колонка %s.%s'),
-    ('ru', 'Column %s.%s is required and has no default: the release will fail if the table already has rows', 'Колонка %s.%s обязательна и без значения по умолчанию: выпуск не применится, если в таблице уже есть строки'),
-    ('ru', 'Column %s.%s: type %s → %s', 'Колонка %s.%s: тип %s → %s'),
-    ('ru', 'Column %s.%s changes its type: values that cannot be converted will stop the release', 'Колонка %s.%s меняет тип: значения, которые не преобразуются, остановят выпуск'),
-    ('ru', 'Column %s.%s: default value', 'Колонка %s.%s: значение по умолчанию'),
-    ('ru', 'Column %s.%s: required', 'Колонка %s.%s: обязательная'),
-    ('ru', 'Column %s.%s: optional', 'Колонка %s.%s: необязательная'),
-    ('ru', 'Column %s.%s: the generated expression, identity or collation changed — the release does not carry this over', 'Колонка %s.%s: вычисляемое выражение, identity или правило сортировки изменились — выпуск их не переносит'),
-    ('ru', 'Deleted column %s.%s', 'Удалена колонка %s.%s'),
-    ('ru', 'Column %s.%s will be deleted with its data. If this is a rename, do it in the table designer — the release will rename the column', 'Колонка %s.%s будет удалена вместе с данными. Если это переименование, сделайте его в конструкторе таблиц — выпуск переименует колонку'),
-    ('ru', 'Deleted constraint %s.%s', 'Удалено ограничение %s.%s'),
-    ('ru', 'Changed constraint %s.%s', 'Изменено ограничение %s.%s'),
-    ('ru', 'New constraint %s.%s', 'Новое ограничение %s.%s'),
-    ('ru', 'Deleted index %s', 'Удалён индекс %s'),
-    ('ru', 'Changed index %s', 'Изменён индекс %s'),
-    ('ru', 'New index %s', 'Новый индекс %s'),
-    ('ru', 'Deleted trigger %s.%s', 'Удалён триггер %s.%s'),
-    ('ru', 'Changed trigger %s.%s', 'Изменён триггер %s.%s'),
-    ('ru', 'New trigger %s.%s', 'Новый триггер %s.%s'),
-    ('ru', 'Deleted table %s', 'Удалена таблица %s'),
-    ('ru', 'Table %s will be deleted with its data', 'Таблица %s будет удалена вместе с данными'),
-    ('ru', 'New function %s', 'Новая функция %s'),
-    ('ru', 'Changed function %s', 'Изменена функция %s'),
-    ('ru', 'Deleted function %s', 'Удалена функция %s'),
-    ('ru', 'New view %s', 'Новое представление %s'),
-    ('ru', 'Changed view %s', 'Изменено представление %s'),
-    ('ru', 'Deleted view %s', 'Удалено представление %s'),
-    ('ru', 'Data of table %s', 'Данные таблицы %s'),
-    ('ru', 'Data of table %s references %s, whose rows the release does not carry: another database may lack the required rows', 'Данные таблицы %s ссылаются на %s, строки которой выпуск не переносит: на другой базе нужных строк может не быть'),
-    ('ru', 'Metadata: actions', 'Метаданные: действия'),
-    ('ru', 'Metadata: forms', 'Метаданные: формы'),
-    ('ru', 'Metadata: form components', 'Метаданные: компоненты форм'),
-    ('ru', 'Metadata: table columns and row buttons', 'Метаданные: колонки и кнопки таблиц'),
-    ('ru', 'Metadata: reports', 'Метаданные: отчёты'),
-    ('ru', 'Metadata: roles and their forms', 'Метаданные: роли и их формы'),
-    ('ru', 'Metadata: menu', 'Метаданные: меню'),
-    ('ru', 'Deleted menu folder “%s”', 'Удалена папка меню «%s»'),
-    ('ru', 'Deleted forms: %s', 'Удалены формы: %s'),
-    ('ru', 'Deleted reports: %s', 'Удалены отчёты: %s'),
-    ('ru', 'Deleted roles: %s', 'Удалены роли: %s'),
-    ('ru', 'Deleted actions: %s', 'Удалены действия: %s'),
-    ('ru', 'Translations', 'Переводы'),
-    ('ru', 'Solution description and contents', 'Описание и состав решения'),
-    ('ru', 'Release %s', 'Выпуск %s'),
-    ('ru', 'The platform core is released through core migrations, not from the editor', 'Ядро платформы выпускается миграциями ядра, а не из редактора'),
-    ('ru', 'Solution name: lowercase Latin letters, digits and _, starting with a letter', 'Имя решения: латинские буквы в нижнем регистре, цифры и _, начинается с буквы'),
-    ('ru', 'Enter the solution title', 'Укажите название решения'),
-    ('ru', 'Prefix: lowercase Latin letters, digits and _, for example my_app_', 'Префикс: латинские буквы в нижнем регистре, цифры и _, например my_app_'),
-    ('ru', 'Package folder: lowercase Latin letters, digits and _', 'Папка пакета: латинские буквы в нижнем регистре, цифры и _'),
-    ('ru', 'The core folder belongs to the core; choose another one', 'Папка core занята ядром; выберите другую'),
-    ('ru', 'Schema: lowercase Latin letters, digits and _; not pgerp and not pg_…', 'Схема: латинские буквы в нижнем регистре, цифры и _; не pgerp и не pg_…'),
-    ('ru', 'Schema “%s” is not allowed for a solution', 'Схема «%s» недопустима для решения'),
-    ('ru', 'The schema of solution “%s” has tables: delete them or move them to another solution first', 'В схеме решения «%s» есть таблицы: сначала удалите их или перенесите в другое решение'),
-    ('ru', 'Prefix %s already belongs to another solution', 'Префикс %s уже у другого решения'),
-    ('ru', 'Solution “%s” already exists — choose another name', 'Решение «%s» уже есть — выберите другое имя'),
-    ('ru', 'The platform core cannot be changed in the editor', 'Ядро платформы в редакторе не меняется'),
-    ('ru', 'Solution “%s” saved', 'Решение «%s» сохранено'),
-    ('ru', 'Solution “%s” deleted; its objects remain in the database', 'Решение «%s» удалено; его объекты остались в базе'),
-    ('ru', 'There is no %s “%s”', 'Объекта %s «%s» нет'),
-    ('ru', 'Table “%s” does not belong to any solution', 'Таблица «%s» не входит ни в одно решение'),
-    ('ru', 'Nothing has changed in the solution since the last release', 'После прошлого выпуска в решении ничего не изменилось'),
-    ('ru', 'Release %s created: %s', 'Выпуск %s создан: %s'),
-    ('ru', 'Release %s of solution “%s” not found', 'Выпуск %s решения «%s» не найден'),
-    ('ru', 'Only the last release of a solution can be cancelled', 'Отменить можно только последний выпуск решения'),
-    ('ru', 'The initial state of a solution cannot be cancelled', 'Исходное состояние решения не отменяется'),
-    ('ru', 'Release %s cancelled. If the release file has already been saved, delete it', 'Выпуск %s отменён. Если файл выпуска уже сохранён, удалите его'),
-    ('ru', '%s “%s”: lowercase Latin letters, digits and _, up to 63 characters', '%s «%s»: латинские буквы в нижнем регистре, цифры и _, до 63 символов'),
-    ('ru', 'Column “%s”: unknown type “%s”', 'Колонка «%s»: неизвестный тип «%s»'),
-    ('ru', '%s: select columns', '%s: выберите колонки'),
-    ('ru', 'Table “%s” not found', 'Таблица «%s» не найдена'),
-    ('ru', '%s — in statement: %s', '%s — в операторе: %s'),
-    ('ru', 'Table name', 'Имя таблицы'),
-    ('ru', 'A table needs at least one column', 'В таблице должна быть хотя бы одна колонка'),
-    ('ru', 'Column names must be unique', 'Имена колонок должны быть уникальны'),
-    ('ru', 'Primary key', 'Первичный ключ'),
-    ('ru', 'Table or view “%s” already exists', 'Таблица или представление «%s» уже есть'),
-    ('ru', 'Column', 'Колонка'),
-    ('ru', 'Column “%s”: serial can be set only for a new column', 'Колонка «%s»: serial задаётся только новой колонке'),
-    ('ru', 'Unique', 'Уникальность'),
-    ('ru', 'Check: enter a condition', 'Проверка: укажите условие'),
-    ('ru', 'Foreign key: table “%s” not found', 'Внешний ключ: таблица «%s» не найдена'),
-    ('ru', 'Foreign key', 'Внешний ключ'),
-    ('ru', 'Index', 'Индекс'),
-    ('ru', 'No changes', 'Изменений нет'),
-    ('ru', 'Table “%s” saved', 'Таблица «%s» сохранена'),
-    ('ru', 'View “%s” not found', 'Представление «%s» не найдено'),
-    ('ru', 'View name', 'Имя представления'),
-    ('ru', 'Write the view query (SELECT …)', 'Напишите запрос представления (SELECT …)'),
-    ('ru', 'Could not recreate the view: %s', 'Представление пересоздать не удалось: %s'),
-    ('ru', 'View “%s” saved', 'Представление «%s» сохранено'),
-    ('ru', 'There is no function “%s” in the solution schemas', 'Функции «%s» в схемах решений нет'),
-    ('ru', 'Object type: table, view, function, sequence, type or action', 'Тип объекта: table, view, function, sequence, type или action'),
-    ('ru', 'form %s, component %s', 'форма %s, компонент %s'),
-    ('ru', 'row button of table %s', 'кнопка строк таблицы %s'),
-    ('ru', 'report %s', 'отчёт %s'),
-    ('ru', 'cancel action of form %s', 'отмена формы %s'),
-    ('ru', 'Action “%s” is used by: %s', 'Действие «%s» используется: %s'),
-    ('ru', 'action %s', 'действие %s'),
-    ('ru', 'trigger %s of table %s', 'триггер %s таблицы %s'),
-    ('ru', 'Function “%s” handles an action: delete the action first', 'Функция «%s» — обработчик действия: сначала удалите действие'),
-    ('ru', 'view %s', 'представление %s'),
-    ('ru', 'foreign key %s of table %s', 'внешний ключ %s таблицы %s'),
-    ('ru', 'Deleted: %s', 'Удалено: %s'),
-    ('ru', 'Write a query', 'Напишите запрос'),
-    ('ru', 'Enter an action', 'Укажите действие'),
-    ('ru', 'Action data is a JSON object, for example {"id": "1"}', 'Данные действия — JSON-объект, например {"id": "1"}'),
-    ('ru', 'Solutions: list', 'Решения: список'),
-    ('ru', 'Solution: contents and releases', 'Решение: состав и выпуски'),
-    ('ru', 'Solution: save', 'Решение: сохранение'),
-    ('ru', 'Solution: delete (objects remain)', 'Решение: удаление (объекты остаются)'),
-    ('ru', 'Solution: add an object explicitly', 'Решение: явное включение объекта'),
-    ('ru', 'Solution: carry table rows in a release', 'Решение: перенос строк таблицы в выпуске'),
-    ('ru', 'Release: changes and migration text', 'Выпуск: изменения и текст миграции'),
-    ('ru', 'Release: create', 'Выпуск: создание'),
-    ('ru', 'Release: migration text', 'Выпуск: текст миграции'),
-    ('ru', 'Release: cancel the last one', 'Выпуск: отмена последнего'),
-    ('ru', 'Data schema: tables, views, functions', 'Схема данных: таблицы, представления, функции'),
-    ('ru', 'Data schema: table structure', 'Схема данных: структура таблицы'),
-    ('ru', 'Data schema: create and alter a table', 'Схема данных: создание и изменение таблицы'),
-    ('ru', 'Data schema: view query', 'Схема данных: запрос представления'),
-    ('ru', 'Data schema: save a view', 'Схема данных: сохранение представления'),
-    ('ru', 'Data schema: function source', 'Схема данных: код функции'),
-    ('ru', 'Data schema: delete an object', 'Схема данных: удаление объекта'),
-    ('ru', 'SQL console: run a query', 'SQL-консоль: выполнение запроса'),
-    ('ru', 'SQL console: test an action', 'SQL-консоль: проверка действия'),
-    ('ru', 'Solutions: first sign-in choice completed', 'Решения: выбор при первом входе завершён'),
-    ('ru', 'Only an administrator can install solutions', 'Устанавливать решения может только администратор'),
-    ('ru', 'Invalid solution name: %s', 'Недопустимое имя решения: %s'),
-    ('ru', 'A clean installation is started only by an administrator', 'Чистую установку запускает только администратор'),
-    ('ru', 'The platform core cannot be reinstalled', 'Ядро платформы нельзя переустановить'),
-    ('ru', 'Schema “%s” cannot be deleted', 'Схему «%s» нельзя удалить'),
-    ('ru', 'Schema “%s” belongs to another solution', 'Схема «%s» принадлежит другому решению'),
-    ('ru', 'Chart "%": select the data source action', 'График «%»: выберите действие-источник данных'),
-    ('ru', 'Chart: specify at least one value column', 'График: укажите хотя бы одну колонку значений'),
-    ('ru', 'Chart: unknown format %s', 'График: неизвестный формат %s'),
-    ('ru', 'Value', 'Значение')
-ON CONFLICT (lang, source) DO NOTHING;
-
--- #####################################################################
--- MCP-сервер
--- #####################################################################
--- =====================================================================
--- MCP-сервер: разработка прикладных решений ИИ-агентом (Claude Code, Claude Desktop и др.)
--- =====================================================================
--- Шлюз принимает POST /mcp (Model Context Protocol, транспорт Streamable HTTP) с токеном
--- Authorization: Bearer <токен>, находит по токену пользователя (pgerp.mcp_token_login) и передаёт
--- тело запроса JSON-RPC в pgerp.mcp_handle как есть. Инструменты MCP — строки pgerp.mcp_tools: каждый
--- вызывает действие через маршрутизатор handle_ui_event с правами владельца токена, как кнопка формы.
--- Новый инструмент — строка в mcp_tools; Java при этом не меняется.
---
--- Токены выдаёт администратор (редактор → «Доступ MCP»); в базе хранится только хеш токена.
--- =====================================================================
-
-CREATE TABLE pgerp.mcp_tokens (
-    id           BIGSERIAL PRIMARY KEY,
-    user_id      BIGINT NOT NULL REFERENCES pgerp.users(id) ON DELETE CASCADE,
-    title        VARCHAR(200) NOT NULL CHECK (trim(title) <> ''),
-    token_hash   TEXT NOT NULL UNIQUE,
-    token_hint   VARCHAR(20) NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    created_by   VARCHAR(50),
-    last_used_at TIMESTAMPTZ,
-    expires_at   TIMESTAMPTZ
-);
-CREATE INDEX mcp_tokens_user_id_idx ON pgerp.mcp_tokens (user_id);
-
--- Инструменты: имя → действие. fixed_args дописываются к аргументам вызова (например, исходные тексты формы);
--- hook — обработка в шлюзе: compile_jrxml — проверка шаблона отчёта до сохранения,
--- write_migration — запись файла выпуска в пакет решения (ERP_DEV_SOLUTIONS_DIR), packages — инструмент целиком
--- выполняет шлюз (пакеты решений лежат в приложении): action_name задаёт права на него
-CREATE TABLE pgerp.mcp_tools (
-    name         VARCHAR(64) PRIMARY KEY CHECK (name ~ '^[a-z][a-z0-9_]*$'),
-    action_name  VARCHAR(100) NOT NULL REFERENCES pgerp.ui_actions(action_name) ON UPDATE CASCADE ON DELETE CASCADE,
-    title        VARCHAR(200) NOT NULL,
-    description  TEXT NOT NULL,
-    input_schema JSONB NOT NULL DEFAULT '{"type": "object", "properties": {}}' CHECK (input_schema->>'type' = 'object'),
-    fixed_args   JSONB CHECK (fixed_args IS NULL OR jsonb_typeof(fixed_args) = 'object'),
-    read_only    BOOLEAN NOT NULL DEFAULT FALSE,
-    hook         VARCHAR(30) CHECK (hook IN ('compile_jrxml', 'write_migration', 'packages')),
-    sort_order   INT NOT NULL DEFAULT 0
-);
-
--- ---------------------------------------------------------------------
 -- Токены
 -- ---------------------------------------------------------------------
+
 -- Логин владельца действующего токена; NULL — токен неизвестен, отозван, истёк или пользователь отключён
 CREATE FUNCTION pgerp.mcp_token_login(p_token TEXT)
 RETURNS VARCHAR AS $$
@@ -5591,6 +5078,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Роли и переводы: компактные действия для агента и редактора
 -- ---------------------------------------------------------------------
+
 -- role_list: {} → роли с выданными формами
 CREATE FUNCTION pgerp.ui_role_list(p_data JSON)
 RETURNS JSON AS $$
@@ -5657,6 +5145,7 @@ $$ LANGUAGE plpgsql STABLE;
 -- ---------------------------------------------------------------------
 -- Справочник разработчика: как устроена платформа и как вести разработку инструментами (на английском)
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION pgerp.dev_guide()
 RETURNS TEXT AS $guide$
 SELECT $text$# PgERP: building application solutions
@@ -5665,7 +5154,8 @@ SELECT $text$# PgERP: building application solutions
 Data-Driven UI: all logic and the interface description live in PostgreSQL. Java is a thin gateway; the browser draws forms
 from metadata and executes the instructions that PL/pgSQL functions return.
 - Application tables, views and functions live in their solution's schema (solution_get → db_schema; defaults to the
-  solution name) or in public. The core is schema pgerp (do not touch it). Solution code calls its own objects without a schema.
+  solution name) or in public. The core is schema pgerp, not a solution: releases and sql_run cannot change it, and a function cannot take the name
+  of a core function. The platform version: SELECT pgerp.pgerp_version(). Solution code calls its own objects without a schema.
   The search path is solution schemas, public, pgerp: core helpers are called without a schema (ui_ok, ui_require, …).
 - An action is a function name(p_data JSON) RETURNS JSON registered in pgerp.ui_actions.
   The browser calls it with the values of all form fields: {"field_name": "value", …} (values are strings).
@@ -5774,6 +5264,7 @@ $$ LANGUAGE sql IMMUTABLE;
 -- ---------------------------------------------------------------------
 -- Протокол MCP (JSON-RPC 2.0)
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION pgerp.mcp_error(p_id JSONB, p_code INT, p_message TEXT)
 RETURNS JSONB AS $$
     SELECT jsonb_build_object('jsonrpc', '2.0', 'id', p_id, 'error', jsonb_build_object('code', p_code, 'message', p_message));
@@ -5862,7 +5353,7 @@ BEGIN
             'protocolVersion', CASE WHEN v_version IN ('2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05') THEN v_version
                                     ELSE '2025-06-18' END,
             'capabilities', jsonb_build_object('tools', jsonb_build_object('listChanged', FALSE)),
-            'serverInfo', jsonb_build_object('name', 'pgerp', 'title', 'PgERP', 'version', '1.0'),  -- no i18n
+            'serverInfo', jsonb_build_object('name', 'pgerp', 'title', 'PgERP', 'version', pgerp.pgerp_version()),  -- no i18n
             'instructions', 'PgERP is a platform where application solutions (tables, PL/pgSQL functions, forms, menus, roles, reports) '  -- no i18n
                             || 'live entirely in PostgreSQL. Call platform_guide before you start: it describes the platform, '
                             || 'its rules and the development workflow. Write interface texts in English.'))::JSON;
@@ -5893,9 +5384,897 @@ END;
 $$ LANGUAGE plpgsql
 SET search_path = public, pgerp;
 
+-- #####################################################################
+-- Представления и триггеры
+-- #####################################################################
+
+-- ---------------------------------------------------------------------
+-- Сессии и вход
+-- 1. У пользователя есть отметка сессии: смена пароля, логина или состояния её меняет. Шлюз сверяет отметку
+--    на каждом запросе и берёт роли из базы, а не из сессии. Открытые WebSocket закрывает сообщение revoked_users.
+--    Смена пароля отзывает и токены MCP пользователя.
+-- 2. Неудачные попытки входа считаются по паре «логин + источник» одинаково для любых логинов, есть ли они или нет.
+--    Источник — известный браузер (cookie после удачного входа), иначе адрес. От перебора со многих адресов —
+--    общий предел на логин; известных браузеров он не касается, поэтому владельца посторонний не заблокирует.
+-- ---------------------------------------------------------------------
+
+CREATE TRIGGER users_session_rotate BEFORE UPDATE ON pgerp.users
+    FOR EACH ROW EXECUTE FUNCTION pgerp.auth_session_rotate();
+
+CREATE TRIGGER users_session_revoked AFTER UPDATE OR DELETE ON pgerp.users
+    FOR EACH ROW EXECUTE FUNCTION pgerp.auth_session_revoked();
+
+CREATE TRIGGER users_failures_clear AFTER UPDATE OF locked_until ON pgerp.users
+    FOR EACH ROW EXECUTE FUNCTION pgerp.auth_failures_clear();
+
+-- ---------------------------------------------------------------------
+-- Представления
+-- ---------------------------------------------------------------------
+
+-- Действия, которые вызывает форма
+CREATE VIEW pgerp.form_actions AS
+SELECT form_name, action_event AS action_name
+FROM pgerp.form_components
+WHERE action_event IS NOT NULL
+UNION
+SELECT c.form_name, r.row_action
+FROM pgerp.form_components c
+JOIN pgerp.grid_row_actions r ON r.source_action = c.action_event
+WHERE c.component_type = 'grid'
+UNION
+SELECT form_name, cancel_action
+FROM pgerp.forms
+WHERE cancel_action IS NOT NULL;
+
+-- Формы, которые открывает действие: ui_open_form('имя', ...) в коде его функции.
+-- Имя формы, вычисляемое во время работы, сюда не попадает — такую форму выдают роли явно.
+CREATE VIEW pgerp.action_forms AS
+-- prosrc — текст каталога с правилом сортировки "C": имя приводится к обычному
+SELECT DISTINCT a.action_name, m[1]::VARCHAR COLLATE "default" AS form_name
+FROM pgerp.ui_actions a
+JOIN pg_proc p ON p.oid = a.function_name::OID
+CROSS JOIN LATERAL regexp_matches(p.prosrc, 'ui_open_form\s*\(\s*''([a-z_][a-z0-9_]*)''', 'g') AS m
+WHERE EXISTS (SELECT 1 FROM pgerp.forms f WHERE f.form_name = m[1]);
+
+CREATE VIEW pgerp.users_v AS
+SELECT u.id, u.login, u.full_name,
+       (SELECT string_agg(pgerp.ui_t_exact(r.title), ', ' ORDER BY r.title)
+        FROM pgerp.user_roles ur JOIN pgerp.roles r ON r.id = ur.role_id
+        WHERE ur.user_id = u.id) AS roles,
+       pgerp.ui_t_exact(CASE WHEN NOT u.is_active          THEN 'Disabled'
+                             WHEN EXISTS (SELECT 1 FROM pgerp.auth_failures f
+                                          WHERE f.login = u.login AND f.failed_at > now() - INTERVAL '5 minutes'
+                                          GROUP BY f.bucket HAVING count(*) >= 5) THEN 'Sign-in locked'
+                             WHEN u.must_change_password   THEN 'Must change password'
+                             ELSE 'Active' END) AS status,
+       to_char(u.last_login_at, 'DD.MM.YYYY HH24:MI') AS last_login,
+       u.last_login_at
+FROM pgerp.users u;
+
+CREATE VIEW pgerp.user_roles_v AS
+SELECT ur.id, ur.user_id, r.role_name, r.title
+FROM pgerp.user_roles ur
+JOIN pgerp.roles r ON r.id = ur.role_id;
+
+-- Формы для выбора: "Папка / Заголовок"
+CREATE VIEW pgerp.forms_combo_v AS
+SELECT form_name, concat_ws(' / ', pgerp.ui_t_exact(folder), pgerp.ui_t_exact(title)) AS label
+FROM pgerp.forms;
+
+CREATE VIEW pgerp.roles_v AS
+SELECT r.id, r.role_name, pgerp.ui_t_exact(r.title) AS title,
+       (SELECT count(*) FROM pgerp.user_roles ur WHERE ur.role_id = r.id) AS users_count,
+       CASE WHEN r.role_name = 'admin' THEN pgerp.ui_t_exact('All forms')
+            ELSE (SELECT string_agg(pgerp.ui_t_exact(f.title), ', ' ORDER BY f.title)
+                  FROM pgerp.role_forms rf JOIN pgerp.forms f ON f.form_name = rf.form_name
+                  WHERE rf.role_id = r.id) END AS forms
+FROM pgerp.roles r;
+
+CREATE VIEW pgerp.role_forms_v AS
+SELECT rf.id, rf.role_id, rf.form_name, pgerp.ui_t_exact(f.title) AS title, pgerp.ui_t_exact(f.folder) AS folder
+FROM pgerp.role_forms rf
+JOIN pgerp.forms f ON f.form_name = rf.form_name;
+
+CREATE VIEW pgerp.roles_combo_v AS
+SELECT id, pgerp.ui_t_exact(title) AS title FROM pgerp.roles;
+
+-- Метаданные и строковые литералы с кириллицей в коде функций схем public и pgerp
+-- (сообщения ui_require, ui_message, шаблоны format()). Склеенные из частей тексты сюда
+-- попадают частями — их обработчик переводит сам через ui_t().
+
+-- Тексты без перевода на каждый язык, кроме исходного. id — устойчивый хеш языка и текста
+
+CREATE VIEW pgerp.target_languages_v AS
+SELECT code, title, sort_order FROM pgerp.languages WHERE NOT is_source;
+
+-- =====================================================================
+-- Отчёты PDF (JasperReports)
+-- =====================================================================
+
+-- Тексты отчётов — в форме «Переводы»: названия и $R{...} из шаблонов
+CREATE VIEW pgerp.translatable_texts AS
+SELECT DISTINCT ON (source) source, origin
+FROM (
+    SELECT title AS source, 'Form' AS origin, 1 AS priority FROM pgerp.forms
+    UNION ALL SELECT folder, 'Form folder', 1 FROM pgerp.forms WHERE folder IS NOT NULL
+    UNION ALL SELECT label, 'Form component', 1 FROM pgerp.form_components WHERE label IS NOT NULL
+    UNION ALL SELECT tab, 'Form tab', 1 FROM pgerp.form_components WHERE tab IS NOT NULL
+    UNION ALL SELECT options->>'placeholder', 'Empty list item', 1 FROM pgerp.form_components
+              WHERE options->>'placeholder' IS NOT NULL
+    UNION ALL SELECT column_title, 'Table column', 1 FROM pgerp.grid_columns
+    UNION ALL SELECT label, 'Row button', 1 FROM pgerp.grid_row_actions
+    UNION ALL SELECT title, 'Menu', 1 FROM pgerp.menu_items
+    UNION ALL SELECT description, 'Action', 1 FROM pgerp.ui_actions WHERE description IS NOT NULL
+    UNION ALL SELECT title, 'Role', 1 FROM pgerp.roles
+    UNION ALL SELECT title, 'Report', 1 FROM pgerp.reports
+    UNION ALL
+    SELECT m[1], 'Report: ' || r.name, 1
+    FROM pgerp.reports r
+    CROSS JOIN LATERAL regexp_matches(r.jrxml, '\$R\{([^}]+)\}', 'g') AS m
+    UNION ALL
+    -- Строки кода с комментарием «-- no i18n» пропускаются: заголовки в файлах выпуска, сообщения протокола MCP
+    SELECT replace(m[1], '''''', ''''), 'Code: ' || p.proname, 2
+    FROM pg_proc p
+    CROSS JOIN LATERAL regexp_matches(regexp_replace(p.prosrc, '[^\n]*--[[:space:]]*no i18n[^\n]*', '', 'g'),
+                                      '''((?:[^'']|'''')*)''', 'g') AS m
+    WHERE p.pronamespace = ANY (pgerp.app_schema_oids() || 'pgerp'::regnamespace::OID)
+      AND m[1] ~ '^[[:upper:]][[:lower:]]'  -- похоже на фразу: с заглавной буквы, не идентификатор и не SQL
+
+) t
+WHERE trim(source) <> ''
+ORDER BY source, priority, origin;
+
+-- Тексты без перевода на каждый язык, кроме исходного. id — устойчивый хеш языка и текста. Текст, который
+-- переводится шаблоном (например «Заполните поле «Имя»» шаблоном «Заполните поле «%s»»), уже переведён
+CREATE VIEW pgerp.translation_missing_v AS
+SELECT ('x' || substr(md5(l.code || chr(1) || t.source), 1, 13))::BIT(52)::BIGINT AS id,
+       l.code AS lang, t.source, t.origin
+FROM pgerp.languages l
+CROSS JOIN pgerp.translatable_texts t
+WHERE NOT l.is_source
+  AND NOT EXISTS (SELECT 1 FROM pgerp.translations tr WHERE tr.lang = l.code AND tr.source = t.source)
+  AND NOT EXISTS (SELECT 1 FROM pgerp.translations tr
+                  WHERE tr.lang = l.code AND tr.is_template
+                    AND t.source ~ pgerp.i18n_template_regex(tr.source));
+
+-- ---------------------------------------------------------------------
+-- Граница ядра и решений
+--
+-- Ядро — не решение. Его объекты в решения не входят, выпуском не меняются и с переустановкой решения не удаляются:
+--   * функции — всё, что есть в схеме pgerp; функция решения с таким именем недопустима: путь поиска ставит
+--     схемы решений раньше pgerp, и она подменила бы функцию ядра и для самого ядра;
+--   * формы, действия, отчёты, роли и папки меню ядра перечислены в core_objects (заполняется в конце миграции).
+-- Это защита от ошибок разработки, а не от администратора базы: владелец базы может изменить и саму проверку.
+-- ---------------------------------------------------------------------
+
+CREATE TRIGGER solution_objects_not_core BEFORE INSERT OR UPDATE ON pgerp.solution_objects
+    FOR EACH ROW EXECUTE FUNCTION pgerp.core_not_in_solution();
+
+CREATE TRIGGER solutions_not_core_menu BEFORE INSERT OR UPDATE ON pgerp.solutions
+    FOR EACH ROW EXECUTE FUNCTION pgerp.core_menu_not_in_solution();
+
+-- Все прикладные объекты: таблицы, представления, последовательности, функции и типы схем решений и public
+-- (без объектов расширений и истории Flyway) и метаданные (формы, действия, отчёты, роли)
+CREATE VIEW pgerp.dev_catalog AS
+SELECT CASE WHEN c.relkind IN ('r', 'p') THEN 'table' WHEN c.relkind IN ('v', 'm') THEN 'view' ELSE 'sequence' END::VARCHAR AS object_type,
+       c.relname::VARCHAR AS object_name
+FROM pg_class c
+WHERE c.relnamespace = ANY (pgerp.app_schema_oids())
+  AND c.relkind IN ('r', 'p', 'v', 'm', 'S')
+  AND NOT c.relispartition
+  AND c.relname <> 'flyway_schema_history'
+  AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+  -- последовательности колонок (serial, identity) — часть своей таблицы
+  AND NOT (c.relkind = 'S' AND EXISTS (SELECT 1 FROM pg_depend d
+                                       WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                                         AND d.refobjsubid > 0 AND d.deptype IN ('a', 'i')))
+UNION
+SELECT 'function', p.proname::VARCHAR
+FROM pg_proc p
+WHERE p.pronamespace = ANY (pgerp.app_schema_oids())
+  AND p.prokind IN ('f', 'p')
+  AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                  WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+UNION
+SELECT 'type', t.typname::VARCHAR
+FROM pg_type t
+WHERE t.typnamespace = ANY (pgerp.app_schema_oids())
+  AND t.typtype = 'e'
+  AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                  WHERE d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e')
+UNION
+SELECT 'form', form_name::VARCHAR FROM pgerp.forms WHERE NOT pgerp.core_has('form', form_name)
+UNION
+SELECT 'action', a.action_name::VARCHAR
+FROM pgerp.ui_actions a
+JOIN pg_proc p ON p.oid = a.function_name
+WHERE NOT a.is_system AND p.pronamespace <> 'pgerp'::regnamespace AND NOT pgerp.core_has('action', a.action_name)
+UNION
+SELECT 'report', name::VARCHAR FROM pgerp.reports WHERE NOT pgerp.core_has('report', name)
+UNION
+SELECT 'role', role_name::VARCHAR FROM pgerp.roles WHERE NOT pgerp.core_has('role', role_name);
+
+CREATE VIEW pgerp.dev_objects AS
+SELECT c.object_type, c.object_name, pgerp.solution_of(c.object_type, c.object_name) AS solution,
+       EXISTS (SELECT 1 FROM pgerp.solution_objects o
+               WHERE o.object_type = c.object_type AND o.object_name = c.object_name) AS is_explicit
+FROM pgerp.dev_catalog c;
+
+-- #####################################################################
+-- Данные
+-- #####################################################################
+
+-- ---------------------------------------------------------------------
+-- Данные ядра: языки, темы, действия, формы, меню, роли, первый администратор, переводы
+-- ---------------------------------------------------------------------
+
+INSERT INTO pgerp.languages (code, title, is_source, is_default, sort_order) VALUES
+    ('en', 'English', TRUE,  TRUE,  1),
+    ('ru', 'Русский', FALSE, FALSE, 2);
+
+INSERT INTO pgerp.themes (code, title, sort_order) VALUES
+    ('dark',  'Dark',  2),
+    ('light', 'Light', 1);
+
+INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
+    ('action_source',            'pgerp.ui_action_source',          'Source code of the action function',    TRUE,  FALSE),
+    ('form_close',               'pgerp.ui_form_close',             'Close the modal form',          FALSE, FALSE),
+    ('form_delete',              'pgerp.ui_form_delete',            'Delete form',                   TRUE,  FALSE),
+    ('form_get',                 'pgerp.ui_form_open',              'Form structure',                  TRUE,  TRUE),
+    ('form_list',                'pgerp.ui_form_list',              'List of forms and actions',           TRUE,  FALSE),
+    ('form_save',                'pgerp.ui_form_save',              'Save form',                 TRUE,  FALSE),
+    ('forms_combo',              'pgerp.forms_combo',               'List: forms',                    FALSE, FALSE),
+    ('menu_get',                 'pgerp.ui_menu_get',               'Application menu',                  TRUE,  TRUE),
+    ('menu_save',                'pgerp.ui_menu_save',              'Save menu',                  TRUE,  FALSE),
+    ('password_change',          'pgerp.ui_password_change',        'Change own password',              FALSE, TRUE),
+    ('password_change_cancel',   'pgerp.ui_password_change_cancel', 'Cancel password change',              FALSE, TRUE),
+    ('role_delete',              'pgerp.role_delete',               'Delete role',                    FALSE, FALSE),
+    ('role_edit_open',           'pgerp.role_edit_open',            'Role card',                    FALSE, FALSE),
+    ('role_form_add',            'pgerp.role_form_add',             'Add a form to a role',          FALSE, FALSE),
+    ('role_form_remove',         'pgerp.role_form_remove',          'Remove a form from a role',           FALSE, FALSE),
+    ('role_forms_page',          'pgerp.role_forms_page',           'Table: role forms',              FALSE, FALSE),
+    ('role_new_open',            'pgerp.role_new_open',             'New role',                       FALSE, FALSE),
+    ('role_save',                'pgerp.role_save',                 'Save role',                  FALSE, FALSE),
+    ('roles_combo',              'pgerp.roles_combo',               'List: roles',                     FALSE, FALSE),
+    ('roles_page',               'pgerp.roles_page',                'Table: roles',                    FALSE, FALSE),
+    ('session_get',              'pgerp.ui_session_get',            'Current user',             TRUE,  TRUE),
+    ('session_lang_set',         'pgerp.ui_session_lang_set',       'Change user language',         TRUE,  TRUE),
+    ('session_theme_set',        'pgerp.ui_session_theme_set',      'Change user theme',          TRUE,  TRUE),
+    ('target_languages_combo',   'pgerp.target_languages_combo',    'List: translation languages',           FALSE, FALSE),
+    ('translation_delete',       'pgerp.translation_delete',        'Delete translation',                FALSE, FALSE),
+    ('translation_edit_open',    'pgerp.translation_edit_open',     'Translation card',                FALSE, FALSE),
+    ('translation_missing_open', 'pgerp.translation_missing_open',  'Translate an untranslated text',      FALSE, FALSE),
+    ('translation_missing_page', 'pgerp.translation_missing_page',  'Table: untranslated texts',     FALSE, FALSE),
+    ('translation_new_open',     'pgerp.translation_new_open',      'New translation',                    FALSE, FALSE),
+    ('translation_save',         'pgerp.translation_save',          'Save translation',              FALSE, FALSE),
+    ('translations_page',        'pgerp.translations_page',         'Table: translations',                FALSE, FALSE),
+    ('user_edit_open',           'pgerp.user_edit_open',            'User card',            FALSE, FALSE),
+    ('user_new_open',            'pgerp.user_new_open',             'New user',               FALSE, FALSE),
+    ('user_role_add',            'pgerp.user_role_add',             'Assign a role to a user',     FALSE, FALSE),
+    ('user_role_remove',         'pgerp.user_role_remove',          'Remove a role from a user',       FALSE, FALSE),
+    ('user_roles_page',          'pgerp.user_roles_page',           'Table: user roles',       FALSE, FALSE),
+    ('user_save',                'pgerp.user_save',                 'Save user',          FALSE, FALSE),
+    ('user_states_combo',        'pgerp.user_states_combo',         'List: account statuses', FALSE, FALSE),
+    ('users_page',               'pgerp.users_page',                'Table: users',            FALSE, FALSE);
+
+INSERT INTO pgerp.forms (form_name, title, cancel_action, folder) VALUES
+    ('password_change', 'Password change', 'password_change_cancel', 'Administration'),
+    ('role',            'Role',         NULL,                     'Administration'),
+    ('roles',           'Roles',         NULL,                     'Administration'),
+    ('translation',     'Translation',      NULL,                     'Administration'),
+    ('translations',    'Translations',     NULL,                     'Administration'),
+    ('user',            'User', NULL,                     'Administration'),
+    ('users',           'Users', NULL,                     'Administration');
+
+INSERT INTO pgerp.form_components (form_name, sort_order, component_type, component_name, label, action_event, master_field, tab, options) VALUES
+    ('password_change', 1,  'label',    'hint',                     'The password must be at least 8 characters long.',                                                                                                                       NULL,                       NULL, NULL,             NULL),
+    ('password_change', 2,  'input',    'old_password',             'Current password',                                                                                                                                       NULL,                       NULL, NULL,             '{"type": "password"}'),
+    ('password_change', 3,  'input',    'new_password',             'New password',                                                                                                                                         NULL,                       NULL, NULL,             '{"type": "password"}'),
+    ('password_change', 4,  'input',    'new_password_repeat',      'Repeat password',                                                                                                                                        NULL,                       NULL, NULL,             '{"type": "password"}'),
+    ('password_change', 5,  'button',   'btn_change',               'Change password',                                                                                                                                       'password_change',          NULL, NULL,             NULL),
+    ('password_change', 6,  'button',   'btn_cancel',               'Cancel',                                                                                                                                               'password_change_cancel',   NULL, NULL,             NULL),
+    ('role',            1,  'hidden',   'id',                       NULL,                                                                                                                                                   NULL,                       NULL, NULL,             NULL),
+    ('role',            2,  'input',    'role_name',                'Code',                                                                                                                                                  NULL,                       NULL, NULL,             NULL),
+    ('role',            3,  'input',    'title',                    'Title',                                                                                                                                             NULL,                       NULL, NULL,             NULL),
+    ('role',            4,  'label',    'forms_hint',               'Users with this role see these forms in the menu and can run their actions. Forms opened from them (cards, selection windows) are available automatically.', NULL,                       NULL, NULL,             NULL),
+    ('role',            5,  'combobox', 'form_to_add',              'Form',                                                                                                                                                'forms_combo',              NULL, NULL,             NULL),
+    ('role',            6,  'button',   'btn_form_add',             'Add form',                                                                                                                                       'role_form_add',            NULL, NULL,             NULL),
+    ('role',            7,  'grid',     'role_forms_grid',          'Role forms',                                                                                                                                           'role_forms_page',          'id', NULL,             NULL),
+    ('role',            8,  'button',   'btn_save',                 'Save',                                                                                                                                            'role_save',                NULL, NULL,             NULL),
+    ('role',            9,  'button',   'btn_cancel',               'Close',                                                                                                                                              'form_close',               NULL, NULL,             NULL),
+    ('roles',           1,  'button',   'btn_role_new',             'New role',                                                                                                                                           'role_new_open',            NULL, NULL,             NULL),
+    ('roles',           2,  'grid',     'roles_grid',               'Roles',                                                                                                                                                 'roles_page',               NULL, NULL,             NULL),
+    ('translation',     1,  'hidden',   'id',                       NULL,                                                                                                                                                   NULL,                       NULL, NULL,             NULL),
+    ('translation',     2,  'combobox', 'lang',                     'Language',                                                                                                                                                 'target_languages_combo',   NULL, NULL,             '{"placeholder": "—"}'),
+    ('translation',     3,  'input',    'source',                   'Source text (Russian)',                                                                                                                             NULL,                       NULL, NULL,             NULL),
+    ('translation',     4,  'input',    'translation',              'Translation',                                                                                                                                              NULL,                       NULL, NULL,             NULL),
+    ('translation',     5,  'label',    'hint',                     'Placeholders: %s in the source text (or % in RAISE); in the translation, %s or %1$s, %2$s in the order of the source text.',                                       NULL,                       NULL, NULL,             NULL),
+    ('translation',     6,  'button',   'btn_save',                 'Save',                                                                                                                                            'translation_save',         NULL, NULL,             NULL),
+    ('translation',     7,  'button',   'btn_cancel',               'Close',                                                                                                                                              'form_close',               NULL, NULL,             NULL),
+    ('translations',    1,  'input',    'translation_filter',       'Source text contains',                                                                                                                              NULL,                       NULL, NULL,             '{"refresh": "translations_grid, translation_missing_grid"}'),
+    ('translations',    2,  'button',   'btn_translation_new',      'New translation',                                                                                                                                        'translation_new_open',     NULL, NULL,             NULL),
+    ('translations',    3,  'grid',     'translations_grid',        'Translations',                                                                                                                                             'translations_page',        NULL, 'Translations',       NULL),
+    ('translations',    4,  'grid',     'translation_missing_grid', 'Untranslated',                                                                                                                                         'translation_missing_page', NULL, 'Untranslated',   NULL),
+    ('user',            1,  'hidden',   'id',                       NULL,                                                                                                                                                   NULL,                       NULL, NULL,             NULL),
+    ('user',            2,  'input',    'login',                    'Login',                                                                                                                                                NULL,                       NULL, 'Account', NULL),
+    ('user',            3,  'input',    'full_name',                'Full name',                                                                                                                                                  NULL,                       NULL, 'Account', NULL),
+    ('user',            4,  'combobox', 'state',                    'Status',                                                                                                                                            'user_states_combo',        NULL, 'Account', '{"placeholder": "—"}'),
+    ('user',            5,  'input',    'password',                 'New password (leave empty to keep)',                                                                                                                     NULL,                       NULL, 'Account', '{"type": "password"}'),
+    ('user',            6,  'label',    'password_hint',            'The user will change this password at the next sign-in.',                                                                                             NULL,                       NULL, 'Account', NULL),
+    ('user',            7,  'combobox', 'role_to_add',              'Role',                                                                                                                                                 'roles_combo',              NULL, 'Roles',           NULL),
+    ('user',            8,  'button',   'btn_role_add',             'Assign role',                                                                                                                                       'user_role_add',            NULL, 'Roles',           NULL),
+    ('user',            9,  'grid',     'user_roles_grid',          'User roles',                                                                                                                                    'user_roles_page',          'id', 'Roles',           NULL),
+    ('user',            10, 'button',   'btn_save',                 'Save',                                                                                                                                            'user_save',                NULL, NULL,             NULL),
+    ('user',            11, 'button',   'btn_cancel',               'Close',                                                                                                                                              'form_close',               NULL, NULL,             NULL),
+    ('users',           1,  'input',    'user_filter',              'Login',                                                                                                                                                NULL,                       NULL, NULL,             '{"refresh": "users_grid"}'),
+    ('users',           2,  'button',   'btn_user_new',             'New user',                                                                                                                                   'user_new_open',            NULL, NULL,             NULL),
+    ('users',           3,  'grid',     'users_grid',               'Users',                                                                                                                                         'users_page',               NULL, NULL,             NULL);
+
+INSERT INTO pgerp.grid_columns (action_name, display_order, field_name, column_title, cell_type, sort_column) VALUES
+    ('role_forms_page',          1, 'title',       'Form',           'text',   'title'),
+    ('role_forms_page',          2, 'folder',      'Folder',           'text',   'folder'),
+    ('roles_page',               1, 'title',       'Title',        'text',   'title'),
+    ('roles_page',               2, 'role_name',   'Code',             'text',   'role_name'),
+    ('roles_page',               3, 'users_count', 'User count',   'number', 'users_count'),
+    ('roles_page',               4, 'forms',       'Forms',           'text',   NULL),
+    ('translation_missing_page', 1, 'lang',        'Language',            'text',   'lang'),
+    ('translation_missing_page', 2, 'source',      'Source text',  'text',   'source'),
+    ('translation_missing_page', 3, 'origin',      'Used in', 'text',   'origin'),
+    ('translations_page',        1, 'lang',        'Language',            'text',   'lang'),
+    ('translations_page',        2, 'source',      'Source text',  'text',   'source'),
+    ('translations_page',        3, 'translation', 'Translation',         'text',   'translation'),
+    ('user_roles_page',          1, 'title',       'Role',            'text',   'title'),
+    ('user_roles_page',          2, 'role_name',   'Code',             'text',   'role_name'),
+    ('users_page',               1, 'login',       'Login',           'text',   'login'),
+    ('users_page',               2, 'full_name',   'Full name',           'text',   'full_name'),
+    ('users_page',               3, 'roles',       'Roles',            'text',   NULL),
+    ('users_page',               4, 'status',      'Status',       'text',   'status'),
+    ('users_page',               5, 'last_login',  'Last sign-in',  'text',   'last_login_at');
+
+INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label, style) VALUES
+    ('role_forms_page',          1, 'role_form_remove',         'Remove',    'danger'),
+    ('roles_page',               1, 'role_edit_open',           'Edit',  'default'),
+    ('roles_page',               2, 'role_delete',              'Delete',   'danger'),
+    ('translation_missing_page', 1, 'translation_missing_open', 'Translate', 'default'),
+    ('translations_page',        1, 'translation_edit_open',    'Edit',  'default'),
+    ('translations_page',        2, 'translation_delete',       'Delete',   'danger'),
+    ('user_roles_page',          1, 'user_role_remove',         'Remove',    'danger'),
+    ('users_page',               1, 'user_edit_open',           'Edit',  'default');
+
+INSERT INTO pgerp.menu_items (id, parent_id, sort_order, title, form_name) VALUES
+    (17, NULL, 3, 'Administration', NULL),
+    (18, 17,   1, 'Users',      'users'),
+    (19, 17,   2, 'Roles',              'roles'),
+    (20, 17,   3, 'Translations',          'translations');
+
+INSERT INTO pgerp.roles (id, role_name, title) VALUES
+    (1, 'admin', 'Administrator');
+
+-- Первый администратор: admin / admin, пароль нужно сменить при первом входе
+INSERT INTO pgerp.users (id, login, full_name, password_hash, must_change_password)
+VALUES (1, 'admin', 'Administrator', pgerp.auth_hash('admin'), TRUE);
+
+INSERT INTO pgerp.user_roles (user_id, role_id)
+SELECT u.id, r.id FROM pgerp.users u, pgerp.roles r WHERE u.login = 'admin' AND r.role_name = 'admin';
+
+-- Переводы текстов ядра (164)
+INSERT INTO pgerp.translations (lang, source, translation) VALUES
+    ('ru', 'ui_push: the message exceeds 8000 bytes — send less data in it', 'ui_push: сообщение длиннее 8000 байт — передайте в нём меньше данных'),
+    ('ru', 'Administrator', 'Администратор'),
+    ('ru', 'The administrator has access to all forms', 'Администратору доступны все формы'),
+    ('ru', 'Administration', 'Администрирование'),
+    ('ru', 'Active', 'Активен'),
+    ('ru', 'Untranslated', 'Без перевода'),
+    ('ru', 'The source text has %s placeholders. Use %%s or %%1$s, %%2$s, … in the translation', 'В исходном тексте подстановок: %s. В переводе используйте %%s или %%1$s, %%2$s, …'),
+    ('ru', 'All forms', 'Все формы'),
+    ('ru', 'Sign-in locked', 'Вход заблокирован'),
+    ('ru', 'Select a role', 'Выберите роль'),
+    ('ru', 'Select the account status', 'Выберите состояние учётной записи'),
+    ('ru', 'Select a form', 'Выберите форму'),
+    ('ru', 'Select the translation language', 'Выберите язык перевода'),
+    ('ru', 'Drop-down list "%": select the item source action', 'Выпадающий список "%": выберите действие-источник элементов'),
+    ('ru', 'Used in', 'Где встречается'),
+    ('ru', 'Action "%" is not registered', 'Действие "%" не зарегистрировано'),
+    ('ru', 'Tree "%": select the data source action', 'Дерево "%": выберите действие-источник данных'),
+    ('ru', 'Add form', 'Добавить форму'),
+    ('ru', 'Add a form to a role', 'Добавление формы в роль'),
+    ('ru', 'At least one active administrator must remain', 'Должен остаться хотя бы один активный администратор'),
+    ('ru', 'Must change password', 'Должен сменить пароль'),
+    ('ru', 'Set a password — the user will change it at the first sign-in', 'Задайте пароль — пользователь сменит его при первом входе'),
+    ('ru', 'Close', 'Закрыть'),
+    ('ru', 'Close the modal form', 'Закрыть модальную форму'),
+    ('ru', 'Edit', 'Изменить'),
+    ('ru', 'Component names must be unique', 'Имена компонентов должны быть уникальны'),
+    ('ru', 'Full name', 'Имя'),
+    ('ru', 'Form name: lowercase Latin letters, digits and "_"', 'Имя формы: латинские буквы в нижнем регистре, цифры и "_"'),
+    ('ru', 'Source code of the action function', 'Исходный код функции действия'),
+    ('ru', 'Source text', 'Исходный текст'),
+    ('ru', 'Source text (Russian)', 'Исходный текст (русский)'),
+    ('ru', 'Source text contains', 'Исходный текст содержит'),
+    ('ru', 'Translation card', 'Карточка перевода'),
+    ('ru', 'User card', 'Карточка пользователя'),
+    ('ru', 'Role card', 'Карточка роли'),
+    ('ru', 'Code', 'Код'),
+    ('ru', 'The administrator role code cannot be changed', 'Код роли администратора менять нельзя'),
+    ('ru', 'Role code: lowercase Latin letters, digits and "_"', 'Код роли: латинские буквы в нижнем регистре, цифры и "_"'),
+    ('ru', 'Component "%": options must be a JSON object', 'Компонент "%": параметры должны быть объектом JSON'),
+    ('ru', 'Component "%s": action "%s" is not registered', 'Компонент "%s": действие "%s" не зарегистрировано'),
+    ('ru', 'Component No. %s: name must be lowercase Latin letters, digits and "_"', 'Компонент №%s: имя — латинские буквы в нижнем регистре, цифры и "_"'),
+    ('ru', 'Component No. %s: unknown type "%s"', 'Компонент №%s: неизвестный тип "%s"'),
+    ('ru', 'Login', 'Логин'),
+    ('ru', 'Login “%s” is already taken', 'Логин «%s» уже занят'),
+    ('ru', 'Login must be at most 50 characters long', 'Логин — не длиннее 50 символов'),
+    ('ru', 'Login: Latin letters, digits and _ . @ -, starting with a letter or digit', 'Логин: латинские буквы, цифры и символы _ . @ -, начинается с буквы или цифры'),
+    ('ru', 'Application menu', 'Меню приложения'),
+    ('ru', 'Menu saved', 'Меню сохранено'),
+    ('ru', 'Menu, %s: the title is longer than 200 characters', 'Меню, %s: название длиннее 200 символов'),
+    ('ru', 'Menu, %s: enter the item title', 'Меню, %s: укажите название пункта'),
+    ('ru', 'Menu, %s: form "%s" does not exist', 'Меню, %s: формы "%s" нет'),
+    ('ru', 'Menu: items must be passed as a list', 'Меню: пункты передаются списком'),
+    ('ru', 'Title', 'Название'),
+    ('ru', 'Assign a role to a user', 'Назначение роли пользователю'),
+    ('ru', 'Assign role', 'Назначить роль'),
+    ('ru', 'Invalid login or password', 'Неверный логин или пароль'),
+    ('ru', 'Unknown action: %s', 'Неизвестное действие: %s'),
+    ('ru', 'You cannot disable your own account', 'Нельзя отключить свою учётную запись'),
+    ('ru', 'Access denied to action “%s”', 'Нет доступа к действию «%s»'),
+    ('ru', 'Access denied to form “%s”', 'Нет доступа к форме «%s»'),
+    ('ru', 'New role', 'Новая роль'),
+    ('ru', 'New password', 'Новый пароль'),
+    ('ru', 'New password (leave empty to keep)', 'Новый пароль (пусто — не менять)'),
+    ('ru', 'The new password must differ from the current one', 'Новый пароль должен отличаться от текущего'),
+    ('ru', 'The new password and its repetition do not match', 'Новый пароль и повтор не совпадают'),
+    ('ru', 'New translation', 'Новый перевод'),
+    ('ru', 'New user', 'Новый пользователь'),
+    ('ru', 'Disabled', 'Отключён'),
+    ('ru', 'Cancel', 'Отмена'),
+    ('ru', 'Cancel password change', 'Отмена смены пароля'),
+    ('ru', 'Folder', 'Папка'),
+    ('ru', 'Password changed', 'Пароль изменён'),
+    ('ru', 'The password must not match the login', 'Пароль не должен совпадать с логином'),
+    ('ru', 'The password must be at most 72 characters long', 'Пароль — не длиннее 72 символов'),
+    ('ru', 'The password must be at least 8 characters long', 'Пароль — не короче 8 символов'),
+    ('ru', 'The password must be at least 8 characters long.', 'Пароль — не короче 8 символов.'),
+    ('ru', 'Translate', 'Перевести'),
+    ('ru', 'Translation', 'Перевод'),
+    ('ru', 'Translation not found — it may have been deleted', 'Перевод не найден — возможно, он удалён'),
+    ('ru', 'Translate an untranslated text', 'Перевод текста без перевода'),
+    ('ru', 'A translation of this text into this language already exists', 'Перевод этого текста на этот язык уже есть'),
+    ('ru', 'Translations', 'Переводы'),
+    ('ru', 'Repeat password', 'Повтор пароля'),
+    ('ru', 'Placeholders: %s in the source text (or % in RAISE); in the translation, %s or %1$s, %2$s in the order of the source text.', 'Подстановки: в исходном тексте %s (или % в RAISE), в переводе — %s или %1$s, %2$s по порядку исходного текста.'),
+    ('ru', 'Lookup field "%": select the action that opens the list', 'Поле выбора "%": выберите действие открытия списка'),
+    ('ru', 'User count', 'Пользователей'),
+    ('ru', 'Users', 'Пользователи'),
+    ('ru', 'Users with this role see these forms in the menu and can run their actions. Forms opened from them (cards, selection windows) are available automatically.', 'Пользователи роли видят эти формы в меню и выполняют их действия. Формы, которые открываются из них (карточки, окна выбора), доступны автоматически.'),
+    ('ru', 'User', 'Пользователь'),
+    ('ru', 'User not found', 'Пользователь не найден'),
+    ('ru', 'User not found — it may have been deleted', 'Пользователь не найден — возможно, он удалён'),
+    ('ru', 'The user will change this password at the next sign-in.', 'Пользователь сменит заданный пароль при следующем входе.'),
+    ('ru', 'User created. Assign roles on the “Roles” tab', 'Пользователь создан. Назначьте ему роли на вкладке «Роли»'),
+    ('ru', 'Last sign-in', 'Последний вход'),
+    ('ru', 'Roles', 'Роли'),
+    ('ru', 'User roles', 'Роли пользователя'),
+    ('ru', 'Role', 'Роль'),
+    ('ru', 'The administrator role cannot be deleted', 'Роль администратора удалить нельзя'),
+    ('ru', 'Role not found — it may have been deleted', 'Роль не найдена — возможно, она удалена'),
+    ('ru', 'A role with code “%s” already exists', 'Роль с кодом «%s» уже есть'),
+    ('ru', 'Role created. Add the forms it grants access to', 'Роль создана. Добавьте формы, к которым она даёт доступ'),
+    ('ru', 'Light', 'Светлая'),
+    ('ru', 'Session ended — please sign in again', 'Сеанс завершён — войдите снова'),
+    ('ru', 'Too many failed sign-in attempts. Try again in %s min.', 'Слишком много неудачных попыток входа. Повторите через %s мин.'),
+    ('ru', 'Password change', 'Смена пароля'),
+    ('ru', 'Change own password', 'Смена своего пароля'),
+    ('ru', 'Change user theme', 'Смена темы пользователя'),
+    ('ru', 'Change user language', 'Смена языка пользователя'),
+    ('ru', 'Change your password to continue', 'Смените пароль, чтобы продолжить работу'),
+    ('ru', 'Change password', 'Сменить пароль'),
+    ('ru', 'Save the user first', 'Сначала сохраните пользователя'),
+    ('ru', 'Save the role first', 'Сначала сохраните роль'),
+    ('ru', 'Remove a role from a user', 'Снятие роли с пользователя'),
+    ('ru', 'Status', 'Состояние'),
+    ('ru', 'Save menu', 'Сохранение меню'),
+    ('ru', 'Save translation', 'Сохранение перевода'),
+    ('ru', 'Save user', 'Сохранение пользователя'),
+    ('ru', 'Save role', 'Сохранение роли'),
+    ('ru', 'Save form', 'Сохранение формы'),
+    ('ru', 'Save', 'Сохранить'),
+    ('ru', 'List of forms and actions', 'Список форм и действий'),
+    ('ru', 'List: roles', 'Список: роли'),
+    ('ru', 'List: account statuses', 'Список: состояния учётной записи'),
+    ('ru', 'List: forms', 'Список: формы'),
+    ('ru', 'List: translation languages', 'Список: языки перевода'),
+    ('ru', 'Form structure', 'Структура формы'),
+    ('ru', 'Table "%": select the data source action', 'Таблица "%": выберите действие-источник данных'),
+    ('ru', 'Table "%s": master field "%s" not found among the form fields', 'Таблица "%s": поле-мастер "%s" не найдено среди полей формы'),
+    ('ru', 'Table: translations', 'Таблица: переводы'),
+    ('ru', 'Table: users', 'Таблица: пользователи'),
+    ('ru', 'Table: roles', 'Таблица: роли'),
+    ('ru', 'Table: user roles', 'Таблица: роли пользователя'),
+    ('ru', 'Table: untranslated texts', 'Таблица: тексты без перевода'),
+    ('ru', 'Table: role forms', 'Таблица: формы роли'),
+    ('ru', 'Timer "%": select an action', 'Таймер "%": выберите действие'),
+    ('ru', 'The text is already translated or no longer used', 'Текст уже переведён или больше не используется'),
+    ('ru', 'Current password', 'Текущий пароль'),
+    ('ru', 'The current password is incorrect', 'Текущий пароль указан неверно'),
+    ('ru', 'Current user', 'Текущий пользователь'),
+    ('ru', 'Theme “%s” is not supported', 'Тема «%s» не поддерживается'),
+    ('ru', 'Dark', 'Тёмная'),
+    ('ru', 'Remove', 'Убрать'),
+    ('ru', 'Delete translation', 'Удаление перевода'),
+    ('ru', 'Delete role', 'Удаление роли'),
+    ('ru', 'Delete form', 'Удаление формы'),
+    ('ru', 'Remove a form from a role', 'Удаление формы из роли'),
+    ('ru', 'Delete', 'Удалить'),
+    ('ru', 'Delete translation “%s”?', 'Удалить перевод «%s»?'),
+    ('ru', 'Delete role “%s”? Its users will lose access to its forms.', 'Удалить роль «%s»? Её пользователи потеряют доступ к её формам.'),
+    ('ru', 'Enter the source text', 'Укажите исходный текст'),
+    ('ru', 'Enter the role title', 'Укажите название роли'),
+    ('ru', 'Enter the translation', 'Укажите перевод'),
+    ('ru', 'Account', 'Учётная запись'),
+    ('ru', 'The account is disabled — contact the administrator', 'Учётная запись отключена — обратитесь к администратору'),
+    ('ru', 'Form', 'Форма'),
+    ('ru', 'Form "%" not found', 'Форма "%" не найдена'),
+    ('ru', 'Form "%s" not found', 'Форма "%s" не найдена'),
+    ('ru', 'Form "%s" saved', 'Форма "%s" сохранена'),
+    ('ru', 'Forms', 'Формы'),
+    ('ru', 'Role forms', 'Формы роли'),
+    ('ru', 'Language', 'Язык'),
+    ('ru', 'Language “%s” is not supported', 'Язык «%s» не поддерживается'),
+    ('ru', 'item No. %s', 'пункт №%s'),
+    ('ru', '—', '—');
+
+SELECT setval(pg_get_serial_sequence('pgerp.menu_items', 'id'), (SELECT max(id) FROM pgerp.menu_items));
+
+SELECT setval(pg_get_serial_sequence('pgerp.roles', 'id'), (SELECT max(id) FROM pgerp.roles));
+
+SELECT setval(pg_get_serial_sequence('pgerp.users', 'id'), (SELECT max(id) FROM pgerp.users));
+
+-- =====================================================================
+-- Редактор функций действий (кнопка «{ }» у поля «Действие» в редакторе форм).
+--
+--  * function_get — код функции действия для правки или, если действия ещё нет, заготовка
+--    под тип компонента: обработчик кнопки/таймера с полями формы, источник таблицы, дерева,
+--    выпадающего списка, открытие списка для поля выбора.
+--  * function_save — создать или заменить функцию и зарегистрировать действие.
+--
+-- Правятся только прикладные обработчики public.имя(JSON) RETURNS JSON без особых свойств;
+-- функции ядра (pgerp) и прочие показываются только для чтения. Клиент присылает не SQL, а имя,
+-- язык, изменчивость и тело: заголовок CREATE FUNCTION собирает база (%I, ограничитель тела,
+-- которого нет в самом теле) — дописать к нему второй оператор нельзя. Оба действия системные:
+-- доступны только администратору.
+--
+-- Функции, созданные в редакторе, живут в базе, как и формы из редактора форм; чтобы они попали
+-- в новую установку, их переносят в миграцию.
+-- =====================================================================
+
+INSERT INTO pgerp.function_templates (component_type, body) VALUES
+('handler', $t$-- {label}: the values of all form fields arrive in p_data.
+{declare}BEGIN
+{require}    -- Change the data
+    -- PERFORM ui_print('Text for the message panel');  -- a line in the panel at the bottom of the screen
+
+    RETURN ui_ok(ui_message('Done'));
+END;
+$t$),
+('grid', $t$-- Table source: a page of rows with sorting and search.
+-- Columns and row buttons live in pgerp.grid_columns and pgerp.grid_row_actions for action '{name}';
+-- without columns the table shows all row fields.
+BEGIN
+    RETURN ui_grid_page('{name}', p_data, 'my_table');  -- table or view
+END;
+$t$),
+('chart', $t$-- Chart source: {labels: [...], series: [{name, values: [...]}], format: number|money|percent}.
+-- Receives the form field values (filters). The chart type is the component option "chart": bar, line, area, pie.
+BEGIN
+    RETURN ui_chart('my_view', 'label', ARRAY['value'], ARRAY['Value'], p_order_column => 'label');
+END;
+$t$),
+('tree', $t$-- Tree source: one level — children of node p_data->>'parent_id' (empty — roots).
+BEGIN
+    RETURN ui_tree_level(p_data, 'my_table');  -- table with columns id, parent_id, name
+END;
+$t$),
+('combobox', $t$-- Drop-down list items: {items: [{id, label}]}. Receives the form field values.
+BEGIN
+    RETURN ui_combo_items('my_table', 'name');  -- table and label column
+END;
+$t$),
+('lookup', $t$-- Lookup field: open a list form in selection mode; the selected row returns to the field.
+BEGIN
+    RETURN ui_ok(ui_open_form('my_list_form',
+        p_title  => {label_literal},
+        p_select => jsonb_build_object('value_field', 'id', 'display_field', 'name')));
+END;
+$t$);
+
+INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system) VALUES
+    ('function_get',  'pgerp.ui_function_get',  'Action function code or a template for the editor', TRUE),
+    ('function_save', 'pgerp.ui_function_save', 'Save an action function from the editor',          TRUE);
+
+INSERT INTO pgerp.translations (lang, source, translation) VALUES
+    ('ru', 'Action function code or a template for the editor', 'Код функции действия или заготовка для редактора'),
+    ('ru', 'Save an action function from the editor', 'Сохранение функции действия из редактора'),
+    ('ru', 'A core function (pgerp schema) is changed only by migrations', 'Функция ядра (схема pgerp) меняется только миграциями'),
+    ('ru', 'Only action handlers can be edited: name(p_data JSON) RETURNS JSON', 'В редакторе правятся только обработчики действий: имя(p_data JSON) RETURNS JSON'),
+    ('ru', 'The editor does not support language %s', 'Язык %s не поддерживается редактором'),
+    ('ru', 'The function has special properties (SET, SECURITY DEFINER, STRICT) — change it with a migration', 'У функции есть особые свойства (SET, SECURITY DEFINER, STRICT) — измените её миграцией'),
+    ('ru', 'Action “%s” is not registered', 'Действие «%s» не зарегистрировано'),
+    ('ru', 'Function name: lowercase Latin letters, digits and "_", up to 63 characters', 'Имя функции: латинские буквы в нижнем регистре, цифры и "_", до 63 символов'),
+    ('ru', 'Function language: plpgsql or sql', 'Язык функции: plpgsql или sql'),
+    ('ru', 'Volatility: VOLATILE, STABLE or IMMUTABLE', 'Изменчивость: VOLATILE, STABLE или IMMUTABLE'),
+    ('ru', 'Write the function code', 'Напишите код функции'),
+    ('ru', 'Action “%s” already exists — choose another name', 'Действие «%s» уже есть — выберите другое имя'),
+    ('ru', 'Function %s(json) already exists — choose another name', 'Функция %s(json) уже есть — выберите другое имя'),
+    ('ru', 'The action calls a function with another name — change it with a migration', 'Действие вызывает функцию с другим именем — её правят миграцией'),
+    ('ru', 'Code error: %s', 'Ошибка в коде: %s'),
+    ('ru', 'Code error (line %s): %s', 'Ошибка в коде (строка %s): %s'),
+    ('ru', 'Fill in the “%s” field', 'Заполните поле «%s»'),
+    ('ru', 'Done', 'Готово'),
+    ('ru', 'Function “%s” saved', 'Функция «%s» сохранена')
+ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
+
+-- =====================================================================
+-- Окно сообщений: ui_print
+-- =====================================================================
+
+INSERT INTO pgerp.translations (lang, source, translation) VALUES
+    ('ru', 'Unknown message kind: %s (allowed: info, warning, error)', 'Неизвестный вид сообщения: %s (допустимы info, warning, error)')
+ON CONFLICT DO NOTHING;
+
+
+-- =====================================================================
+-- Отчёты PDF (JasperReports)
+-- =====================================================================
+
+-- Системные действия: без форм — только администратору. report_fill — всем вошедшим:
+-- доступ проверяет запрос (тот же пользователь, не старше часа)
+INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
+    ('report_fill',    'pgerp.ui_report_fill',    'PDF report: template and data for a ui_report request', TRUE, TRUE),
+    ('report_preview', 'pgerp.ui_report_preview', 'PDF report: data for preview in the editor', TRUE, FALSE),
+    ('report_list',    'pgerp.ui_report_list',    'Report list for the editor',                    TRUE, FALSE),
+    ('report_get',     'pgerp.ui_report_get',     'Report for the editor or a new report template',        TRUE, FALSE),
+    ('report_save',    'pgerp.ui_report_save',    'Save a report from the editor',                  TRUE, FALSE),
+    ('report_delete',  'pgerp.ui_report_delete',  'Delete a report',                                 TRUE, FALSE);
+
+-- Заготовка функции данных отчёта для редактора функций
+INSERT INTO pgerp.function_templates (component_type, body) VALUES
+('report', $t$-- Data of report "{label}". p_data holds the parameters from ui_report (or "Preview parameters").
+-- Top-level keys are report parameters ($P{...}), the rows array holds report rows ($F{...}).
+BEGIN
+    RETURN json_build_object(
+        'title', {label_literal},
+        'rows', COALESCE((SELECT json_agg(r) FROM (
+            SELECT 'Sample row' AS name   -- query for the report rows
+        ) r), '[]'));
+END;
+$t$);
+
+INSERT INTO pgerp.translations (lang, source, translation) VALUES
+    ('ru', 'Report “%s” not found', 'Отчёт «%s» не найден'),
+    ('ru', 'A report can only be shown from a user action', 'Отчёт показывается только из действия пользователя'),
+    ('ru', 'The data function of report “%s” must return a JSON object', 'Функция данных отчёта «%s» должна вернуть JSON-объект'),
+    ('ru', 'The report has expired — open it again', 'Отчёт устарел — откройте его снова'),
+    ('ru', 'Preview parameters must be a JSON object, e.g. {"id": 1}', 'Параметры предпросмотра — JSON-объект, например {"id": 1}'),
+    ('ru', 'Report name: lowercase Latin letters, digits and _, up to 63 characters',
+           'Имя отчёта — латинские буквы в нижнем регистре, цифры и _, не длиннее 63 символов'),
+    ('ru', 'Enter the report title', 'Укажите название отчёта'),
+    ('ru', 'The report template is empty', 'Шаблон отчёта пуст'),
+    ('ru', 'Report “%s” already exists — choose another name', 'Отчёт «%s» уже есть — выберите другое имя'),
+    ('ru', 'Report “%s” saved', 'Отчёт «%s» сохранён'),
+    ('ru', 'Report “%s” deleted', 'Отчёт «%s» удалён'),
+    ('ru', 'PDF report: template and data for a ui_report request', 'Отчёт PDF: шаблон и данные по запросу ui_report'),
+    ('ru', 'PDF report: data for preview in the editor', 'Отчёт PDF: данные для предпросмотра в редакторе'),
+    ('ru', 'Report list for the editor', 'Список отчётов для редактора'),
+    ('ru', 'Report for the editor or a new report template', 'Отчёт для редактора или заготовка нового'),
+    ('ru', 'Save a report from the editor', 'Сохранение отчёта из редактора'),
+    ('ru', 'Delete a report', 'Удаление отчёта'),
+    ('ru', 'Page', 'Страница'),
+    ('ru', 'Sample row', 'Пример строки')
+ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
+
+-- =====================================================================
+-- Колонки таблиц в редакторе форм
+-- =====================================================================
+
+INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
+    ('grid_columns_get',  'pgerp.ui_grid_columns_get',  'Table columns and source fields for the editor',  TRUE, FALSE),
+    ('grid_columns_save', 'pgerp.ui_grid_columns_save', 'Save table columns from the editor',         TRUE, FALSE);
+
+INSERT INTO pgerp.translations (lang, source, translation) VALUES
+    ('ru', 'Columns must be a list', 'Колонки передаются списком'),
+    ('ru', 'Column %s: the field must use lowercase Latin letters, digits and _', 'Колонка %s: поле — латинские буквы в нижнем регистре, цифры и _'),
+    ('ru', 'Column “%s”: the title must be 1 to 100 characters', 'Колонка «%s»: заголовок — от 1 до 100 символов'),
+    ('ru', 'Column “%s”: unknown format %s', 'Колонка «%s»: неизвестный формат %s'),
+    ('ru', 'The source data has no field “%s”', 'Поля «%s» нет в данных источника'),
+    ('ru', 'Column “%s”: you can only sort by a source field', 'Колонка «%s»: сортировать можно только по полю источника'),
+    ('ru', 'Each field can be used in one column only', 'Каждое поле — не больше одной колонки'),
+    ('ru', 'Table columns saved', 'Колонки таблицы сохранены'),
+    ('ru', 'Table columns and source fields for the editor', 'Колонки таблицы и поля источника для редактора'),
+    ('ru', 'Save table columns from the editor', 'Сохранение колонок таблицы из редактора')
+ON CONFLICT (lang, source) DO UPDATE SET translation = EXCLUDED.translation;
+
+-- ---------------------------------------------------------------------
+-- Действия
+-- ---------------------------------------------------------------------
+
+INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
+    ('solution_list',       'pgerp.ui_solution_list',       'Solutions: list',                              TRUE, FALSE),
+    ('solution_get',        'pgerp.ui_solution_get',        'Solution: contents and releases',                    TRUE, FALSE),
+    ('solution_save',       'pgerp.ui_solution_save',       'Solution: save',                          TRUE, FALSE),
+    ('solution_delete',     'pgerp.ui_solution_delete',     'Solution: delete (objects remain)',         TRUE, FALSE),
+    ('solution_object_set', 'pgerp.ui_solution_object_set', 'Solution: add an object explicitly',             TRUE, FALSE),
+    ('solution_data_set',   'pgerp.ui_solution_data_set',   'Solution: carry table rows in a release',     TRUE, FALSE),
+    ('release_preview',     'pgerp.ui_release_preview',     'Release: changes and migration text',           TRUE, FALSE),
+    ('release_create',      'pgerp.ui_release_create',      'Release: create',                             TRUE, FALSE),
+    ('release_get',         'pgerp.ui_release_get',         'Release: migration text',                       TRUE, FALSE),
+    ('release_delete',      'pgerp.ui_release_delete',      'Release: cancel the last one',                    TRUE, FALSE),
+    ('schema_get',          'pgerp.ui_schema_get',          'Data schema: tables, views, functions', TRUE, FALSE),
+    ('table_get',           'pgerp.ui_table_get',           'Data schema: table structure',              TRUE, FALSE),
+    ('table_save',          'pgerp.ui_table_save',          'Data schema: create and alter a table',   TRUE, FALSE),
+    ('view_get',            'pgerp.ui_view_get',            'Data schema: view query',           TRUE, FALSE),
+    ('view_save',           'pgerp.ui_view_save',           'Data schema: save a view',       TRUE, FALSE),
+    ('function_source',     'pgerp.ui_function_source',     'Data schema: function source',                    TRUE, FALSE),
+    ('object_drop',         'pgerp.ui_object_drop',         'Data schema: delete an object',               TRUE, FALSE),
+    ('sql_run',             'pgerp.ui_sql_run',             'SQL console: run a query',              TRUE, FALSE),
+    ('action_run',          'pgerp.ui_action_run',          'SQL console: test an action',               TRUE, FALSE),
+    ('solutions_setup_done', 'pgerp.ui_solutions_setup_done', 'Solutions: first sign-in choice completed',   TRUE, FALSE);
+
+-- ---------------------------------------------------------------------
+-- Переводы: сообщения решений, схемы данных, консоли и выпусков, изменения выпуска, описания действий
+-- ---------------------------------------------------------------------
+
+INSERT INTO pgerp.translations (lang, source, translation) VALUES
+    ('ru', 'Solution “%s” not found', 'Решение «%s» не найдено'),
+    ('ru', 'Table %s renamed to %s', 'Таблица %s переименована в %s'),
+    ('ru', 'Column %s.%s renamed to %s', 'Колонка %s.%s переименована в %s'),
+    ('ru', 'New type %s', 'Новый тип %s'),
+    ('ru', 'Changed type %s', 'Изменён тип %s'),
+    ('ru', 'Values were removed from type %s — the release does not delete them, do it manually', 'Из типа %s убраны значения — выпуск их не удаляет, это делается вручную'),
+    ('ru', 'Deleted type %s', 'Удалён тип %s'),
+    ('ru', 'New sequence %s', 'Новая последовательность %s'),
+    ('ru', 'Deleted sequence %s', 'Удалена последовательность %s'),
+    ('ru', 'New table %s', 'Новая таблица %s'),
+    ('ru', 'New column %s.%s', 'Новая колонка %s.%s'),
+    ('ru', 'Column %s.%s is required and has no default: the release will fail if the table already has rows', 'Колонка %s.%s обязательна и без значения по умолчанию: выпуск не применится, если в таблице уже есть строки'),
+    ('ru', 'Column %s.%s: type %s → %s', 'Колонка %s.%s: тип %s → %s'),
+    ('ru', 'Column %s.%s changes its type: values that cannot be converted will stop the release', 'Колонка %s.%s меняет тип: значения, которые не преобразуются, остановят выпуск'),
+    ('ru', 'Column %s.%s: default value', 'Колонка %s.%s: значение по умолчанию'),
+    ('ru', 'Column %s.%s: required', 'Колонка %s.%s: обязательная'),
+    ('ru', 'Column %s.%s: optional', 'Колонка %s.%s: необязательная'),
+    ('ru', 'Column %s.%s: the generated expression, identity or collation changed — the release does not carry this over', 'Колонка %s.%s: вычисляемое выражение, identity или правило сортировки изменились — выпуск их не переносит'),
+    ('ru', 'Deleted column %s.%s', 'Удалена колонка %s.%s'),
+    ('ru', 'Column %s.%s will be deleted with its data. If this is a rename, do it in the table designer — the release will rename the column', 'Колонка %s.%s будет удалена вместе с данными. Если это переименование, сделайте его в конструкторе таблиц — выпуск переименует колонку'),
+    ('ru', 'Deleted constraint %s.%s', 'Удалено ограничение %s.%s'),
+    ('ru', 'Changed constraint %s.%s', 'Изменено ограничение %s.%s'),
+    ('ru', 'New constraint %s.%s', 'Новое ограничение %s.%s'),
+    ('ru', 'Deleted index %s', 'Удалён индекс %s'),
+    ('ru', 'Changed index %s', 'Изменён индекс %s'),
+    ('ru', 'New index %s', 'Новый индекс %s'),
+    ('ru', 'Deleted trigger %s.%s', 'Удалён триггер %s.%s'),
+    ('ru', 'Changed trigger %s.%s', 'Изменён триггер %s.%s'),
+    ('ru', 'New trigger %s.%s', 'Новый триггер %s.%s'),
+    ('ru', 'Deleted table %s', 'Удалена таблица %s'),
+    ('ru', 'Table %s will be deleted with its data', 'Таблица %s будет удалена вместе с данными'),
+    ('ru', 'New function %s', 'Новая функция %s'),
+    ('ru', 'Changed function %s', 'Изменена функция %s'),
+    ('ru', 'Deleted function %s', 'Удалена функция %s'),
+    ('ru', 'New view %s', 'Новое представление %s'),
+    ('ru', 'Changed view %s', 'Изменено представление %s'),
+    ('ru', 'Deleted view %s', 'Удалено представление %s'),
+    ('ru', 'Data of table %s', 'Данные таблицы %s'),
+    ('ru', 'Data of table %s references %s, whose rows the release does not carry: another database may lack the required rows', 'Данные таблицы %s ссылаются на %s, строки которой выпуск не переносит: на другой базе нужных строк может не быть'),
+    ('ru', 'Metadata: actions', 'Метаданные: действия'),
+    ('ru', 'Metadata: forms', 'Метаданные: формы'),
+    ('ru', 'Metadata: form components', 'Метаданные: компоненты форм'),
+    ('ru', 'Metadata: table columns and row buttons', 'Метаданные: колонки и кнопки таблиц'),
+    ('ru', 'Metadata: reports', 'Метаданные: отчёты'),
+    ('ru', 'Metadata: roles and their forms', 'Метаданные: роли и их формы'),
+    ('ru', 'Metadata: menu', 'Метаданные: меню'),
+    ('ru', 'Deleted menu folder “%s”', 'Удалена папка меню «%s»'),
+    ('ru', 'Deleted forms: %s', 'Удалены формы: %s'),
+    ('ru', 'Deleted reports: %s', 'Удалены отчёты: %s'),
+    ('ru', 'Deleted roles: %s', 'Удалены роли: %s'),
+    ('ru', 'Deleted actions: %s', 'Удалены действия: %s'),
+    ('ru', 'Translations', 'Переводы'),
+    ('ru', 'Solution description and contents', 'Описание и состав решения'),
+    ('ru', 'Release %s', 'Выпуск %s'),
+    ('ru', 'Solution name: lowercase Latin letters, digits and _, starting with a letter', 'Имя решения: латинские буквы в нижнем регистре, цифры и _, начинается с буквы'),
+    ('ru', 'Enter the solution title', 'Укажите название решения'),
+    ('ru', 'Prefix: lowercase Latin letters, digits and _, for example my_app_', 'Префикс: латинские буквы в нижнем регистре, цифры и _, например my_app_'),
+    ('ru', 'Package folder: lowercase Latin letters, digits and _', 'Папка пакета: латинские буквы в нижнем регистре, цифры и _'),
+    ('ru', 'The core folder belongs to the core; choose another one', 'Папка core занята ядром; выберите другую'),
+    ('ru', 'Schema: lowercase Latin letters, digits and _; not pgerp and not pg_…', 'Схема: латинские буквы в нижнем регистре, цифры и _; не pgerp и не pg_…'),
+    ('ru', 'Schema “%s” is not allowed for a solution', 'Схема «%s» недопустима для решения'),
+    ('ru', 'The schema of solution “%s” has tables: delete them or move them to another solution first', 'В схеме решения «%s» есть таблицы: сначала удалите их или перенесите в другое решение'),
+    ('ru', 'Prefix %s already belongs to another solution', 'Префикс %s уже у другого решения'),
+    ('ru', 'Solution “%s” already exists — choose another name', 'Решение «%s» уже есть — выберите другое имя'),
+    ('ru', 'Solution “%s” saved', 'Решение «%s» сохранено'),
+    ('ru', 'Solution “%s” deleted; its objects remain in the database', 'Решение «%s» удалено; его объекты остались в базе'),
+    ('ru', 'There is no %s “%s”', 'Объекта %s «%s» нет'),
+    ('ru', 'Table “%s” does not belong to any solution', 'Таблица «%s» не входит ни в одно решение'),
+    ('ru', 'Nothing has changed in the solution since the last release', 'После прошлого выпуска в решении ничего не изменилось'),
+    ('ru', 'Release %s created: %s', 'Выпуск %s создан: %s'),
+    ('ru', 'Release %s of solution “%s” not found', 'Выпуск %s решения «%s» не найден'),
+    ('ru', 'Only the last release of a solution can be cancelled', 'Отменить можно только последний выпуск решения'),
+    ('ru', 'The initial state of a solution cannot be cancelled', 'Исходное состояние решения не отменяется'),
+    ('ru', 'Release %s cancelled. If the release file has already been saved, delete it', 'Выпуск %s отменён. Если файл выпуска уже сохранён, удалите его'),
+    ('ru', '%s “%s”: lowercase Latin letters, digits and _, up to 63 characters', '%s «%s»: латинские буквы в нижнем регистре, цифры и _, до 63 символов'),
+    ('ru', 'Column “%s”: unknown type “%s”', 'Колонка «%s»: неизвестный тип «%s»'),
+    ('ru', '%s: select columns', '%s: выберите колонки'),
+    ('ru', 'Table “%s” not found', 'Таблица «%s» не найдена'),
+    ('ru', '%s — in statement: %s', '%s — в операторе: %s'),
+    ('ru', 'Table name', 'Имя таблицы'),
+    ('ru', 'A table needs at least one column', 'В таблице должна быть хотя бы одна колонка'),
+    ('ru', 'Column names must be unique', 'Имена колонок должны быть уникальны'),
+    ('ru', 'Primary key', 'Первичный ключ'),
+    ('ru', 'Table or view “%s” already exists', 'Таблица или представление «%s» уже есть'),
+    ('ru', 'Column', 'Колонка'),
+    ('ru', 'Column “%s”: serial can be set only for a new column', 'Колонка «%s»: serial задаётся только новой колонке'),
+    ('ru', 'Unique', 'Уникальность'),
+    ('ru', 'Check: enter a condition', 'Проверка: укажите условие'),
+    ('ru', 'Foreign key: table “%s” not found', 'Внешний ключ: таблица «%s» не найдена'),
+    ('ru', 'Foreign key', 'Внешний ключ'),
+    ('ru', 'Index', 'Индекс'),
+    ('ru', 'No changes', 'Изменений нет'),
+    ('ru', 'Table “%s” saved', 'Таблица «%s» сохранена'),
+    ('ru', 'View “%s” not found', 'Представление «%s» не найдено'),
+    ('ru', 'View name', 'Имя представления'),
+    ('ru', 'Write the view query (SELECT …)', 'Напишите запрос представления (SELECT …)'),
+    ('ru', 'Could not recreate the view: %s', 'Представление пересоздать не удалось: %s'),
+    ('ru', 'View “%s” saved', 'Представление «%s» сохранено'),
+    ('ru', 'There is no function “%s” in the solution schemas', 'Функции «%s» в схемах решений нет'),
+    ('ru', 'Object type: table, view, function, sequence, type or action', 'Тип объекта: table, view, function, sequence, type или action'),
+    ('ru', 'form %s, component %s', 'форма %s, компонент %s'),
+    ('ru', 'row button of table %s', 'кнопка строк таблицы %s'),
+    ('ru', 'report %s', 'отчёт %s'),
+    ('ru', 'cancel action of form %s', 'отмена формы %s'),
+    ('ru', 'Action “%s” is used by: %s', 'Действие «%s» используется: %s'),
+    ('ru', 'action %s', 'действие %s'),
+    ('ru', 'trigger %s of table %s', 'триггер %s таблицы %s'),
+    ('ru', 'Function “%s” handles an action: delete the action first', 'Функция «%s» — обработчик действия: сначала удалите действие'),
+    ('ru', 'view %s', 'представление %s'),
+    ('ru', 'foreign key %s of table %s', 'внешний ключ %s таблицы %s'),
+    ('ru', 'Deleted: %s', 'Удалено: %s'),
+    ('ru', 'Write a query', 'Напишите запрос'),
+    ('ru', 'Enter an action', 'Укажите действие'),
+    ('ru', 'Action data is a JSON object, for example {"id": "1"}', 'Данные действия — JSON-объект, например {"id": "1"}'),
+    ('ru', 'Solutions: list', 'Решения: список'),
+    ('ru', 'Solution: contents and releases', 'Решение: состав и выпуски'),
+    ('ru', 'Solution: save', 'Решение: сохранение'),
+    ('ru', 'Solution: delete (objects remain)', 'Решение: удаление (объекты остаются)'),
+    ('ru', 'Solution: add an object explicitly', 'Решение: явное включение объекта'),
+    ('ru', 'Solution: carry table rows in a release', 'Решение: перенос строк таблицы в выпуске'),
+    ('ru', 'Release: changes and migration text', 'Выпуск: изменения и текст миграции'),
+    ('ru', 'Release: create', 'Выпуск: создание'),
+    ('ru', 'Release: migration text', 'Выпуск: текст миграции'),
+    ('ru', 'Release: cancel the last one', 'Выпуск: отмена последнего'),
+    ('ru', 'Data schema: tables, views, functions', 'Схема данных: таблицы, представления, функции'),
+    ('ru', 'Data schema: table structure', 'Схема данных: структура таблицы'),
+    ('ru', 'Data schema: create and alter a table', 'Схема данных: создание и изменение таблицы'),
+    ('ru', 'Data schema: view query', 'Схема данных: запрос представления'),
+    ('ru', 'Data schema: save a view', 'Схема данных: сохранение представления'),
+    ('ru', 'Data schema: function source', 'Схема данных: код функции'),
+    ('ru', 'Data schema: delete an object', 'Схема данных: удаление объекта'),
+    ('ru', 'SQL console: run a query', 'SQL-консоль: выполнение запроса'),
+    ('ru', 'SQL console: test an action', 'SQL-консоль: проверка действия'),
+    ('ru', 'Solutions: first sign-in choice completed', 'Решения: выбор при первом входе завершён'),
+    ('ru', 'Only an administrator can install solutions', 'Устанавливать решения может только администратор'),
+    ('ru', 'Invalid solution name: %s', 'Недопустимое имя решения: %s'),
+    ('ru', 'A clean installation is started only by an administrator', 'Чистую установку запускает только администратор'),
+    ('ru', 'Schema “%s” cannot be deleted', 'Схему «%s» нельзя удалить'),
+    ('ru', 'Schema “%s” belongs to another solution', 'Схема «%s» принадлежит другому решению'),
+    ('ru', 'Chart "%": select the data source action', 'График «%»: выберите действие-источник данных'),
+    ('ru', 'Chart: specify at least one value column', 'График: укажите хотя бы одну колонку значений'),
+    ('ru', 'Chart: unknown format %s', 'График: неизвестный формат %s'),
+    ('ru', 'Value', 'Значение')
+ON CONFLICT (lang, source) DO NOTHING;
+
 -- ---------------------------------------------------------------------
 -- Действия и инструменты
 -- ---------------------------------------------------------------------
+
 INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
     ('mcp_tokens_list',  'pgerp.ui_mcp_tokens_list',  'MCP: access tokens',         TRUE, FALSE),
     ('mcp_token_create', 'pgerp.ui_mcp_token_create', 'MCP: issue a token',          TRUE, FALSE),
@@ -6097,6 +6476,7 @@ INSERT INTO pgerp.mcp_tools (sort_order, name, action_name, title, read_only, ho
 -- ---------------------------------------------------------------------
 -- Переводы: сообщения токенов MCP, ролей и описания действий
 -- ---------------------------------------------------------------------
+
 INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Enter the token purpose, for example “Claude Code on my laptop”', 'Укажите назначение токена, например «Claude Code на ноутбуке»'),
     ('ru', 'There is no active user “%s”', 'Активного пользователя «%s» нет'),
@@ -6119,8 +6499,27 @@ INSERT INTO pgerp.translations (lang, source, translation) VALUES
 ON CONFLICT (lang, source) DO NOTHING;
 
 INSERT INTO pgerp.translations (lang, source, translation) VALUES
-    ('ru', 'Platform core', 'Ядро платформы'),
-    ('ru', 'Schema pgerp, administration forms and the admin role. Changed only by core migrations',
-           'Схема pgerp, формы администрирования и роль admin. Меняется только миграциями ядра'),
-    ('ru', 'Initial state', 'Исходное состояние')
+    ('ru', 'The platform core is changed only by core migrations: solutions cannot change schema pgerp, core forms, actions and roles',
+           'Ядро платформы меняется только миграциями ядра: решения не меняют схему pgerp, формы, действия и роли ядра'),
+    ('ru', 'Function name “%s” is taken by the platform core — choose another name',
+           'Имя функции «%s» занято ядром платформы — выберите другое'),
+    ('ru', '“%s” belongs to the platform core and cannot be a part of a solution',
+           '«%s» принадлежит ядру платформы и не может входить в решение'),
+    ('ru', 'Menu folder “%s” belongs to the platform core — choose another one',
+           'Папка меню «%s» принадлежит ядру платформы — выберите другую'),
+    ('ru', 'Initial state', 'Исходное состояние'),
+    ('ru', 'Schema “%s” is not empty and does not belong to solution “%s”: choose another schema or drop it manually',
+           'Схема «%s» не пуста и не принадлежит решению «%s»: выберите другую схему или удалите её вручную')
 ON CONFLICT (lang, source) DO NOTHING;
+
+-- ---------------------------------------------------------------------
+-- Состав ядра: всё, что создано этой миграцией. Следующая миграция, которая добавляет ядру форму, действие,
+-- отчёт, роль или папку меню, дописывает их сюда же
+-- ---------------------------------------------------------------------
+
+INSERT INTO pgerp.core_objects (object_type, object_name)
+SELECT 'form', form_name FROM pgerp.forms
+UNION ALL SELECT 'action', action_name FROM pgerp.ui_actions
+UNION ALL SELECT 'report', name FROM pgerp.reports
+UNION ALL SELECT 'role', role_name FROM pgerp.roles
+UNION ALL SELECT DISTINCT 'menu', title FROM pgerp.menu_items WHERE parent_id IS NULL;

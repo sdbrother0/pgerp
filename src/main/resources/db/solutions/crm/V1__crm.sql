@@ -1,5 +1,5 @@
 -- =====================================================================
--- Пакет решения «CRM», выпуск 1: пример прикладной системы на PgERP — полный цикл продаж
+-- Пакет решения «CRM»: пример прикладной системы на PgERP — полный цикл продаж
 -- =====================================================================
 -- Устанавливает администратор (при первом входе или в редакторе: «Решения → Установить»); объекты
 -- создаются в схеме решения (по умолчанию crm, выбирается при установке): имена в этом файле — без схемы.
@@ -16,45 +16,22 @@
 --  * Уведомления: переданная сделка или задача — окно у нового ответственного (ui_push_to_user),
 --    выигранная сделка — руководителям (ui_push_to_role); списки обновляются во всех вкладках (ui_push_to).
 --  * Отчёты PDF: коммерческое предложение по сделке и воронка продаж (ui_report).
+--  * Триггеры журнала и уведомлений пропускают данные выпуска (ui_in_release): демо-данные — не действия пользователей.
+--  * Цвет метки стадии — в справочнике стадий (crm_stages.tone, см. pgerp.ui_badge).
 --
 -- Все объекты — с префиксом crm_: функции правятся в редакторе функций, их тексты попадают в форму
 -- «Переводы». Демо-пользователи ivanov, petrova (менеджеры) и sidorov (руководитель) создаются без пароля:
 -- администратор задаёт его в форме «Пользователи». Даты демо-данных — относительно времени установки.
 -- Выпуск применяется один раз: на базе, где он уже записан (pgerp.solution_releases), он пропускается.
 SELECT pgerp.solution_release_apply('crm', 1, 'CRM', $release$
--- ---------------------------------------------------------------------
--- Решение
--- ---------------------------------------------------------------------
-INSERT INTO pgerp.solutions (name, title, prefix, menu_folder, migration_folder, description)
-VALUES ('crm', 'CRM', 'crm_', 'CRM', 'crm', 'Companies, contacts, pipeline deals, tasks, reports')
-ON CONFLICT (name) DO UPDATE SET title = EXCLUDED.title, prefix = EXCLUDED.prefix, menu_folder = EXCLUDED.menu_folder,
-    migration_folder = EXCLUDED.migration_folder, description = EXCLUDED.description;
-
--- ---------------------------------------------------------------------
--- Роли и демо-пользователи
--- ---------------------------------------------------------------------
-INSERT INTO pgerp.roles (role_name, title) VALUES
-    ('crm_manager', 'Sales manager'),
-    ('crm_head',    'Head of sales')
-ON CONFLICT (role_name) DO NOTHING;
-
--- Пароль — случайный, никому не известный: войти можно после того, как администратор задаст пароль
-INSERT INTO pgerp.users (login, full_name, password_hash, must_change_password) VALUES
-    ('ivanov',  'Ivan Ivanov',     pgerp.auth_hash(gen_random_uuid()::TEXT), TRUE),
-    ('petrova', 'Maria Petrova',   pgerp.auth_hash(gen_random_uuid()::TEXT), TRUE),
-    ('sidorov', 'Alexey Sidorov', pgerp.auth_hash(gen_random_uuid()::TEXT), TRUE)
-ON CONFLICT (login) DO NOTHING;
-
-INSERT INTO pgerp.user_roles (user_id, role_id)
-SELECT u.id, r.id
-FROM (VALUES ('ivanov', 'crm_manager'), ('petrova', 'crm_manager'), ('sidorov', 'crm_head')) AS t(login, role)
-JOIN pgerp.users u ON u.login = t.login
-JOIN pgerp.roles r ON r.role_name = t.role
-ON CONFLICT DO NOTHING;
+-- #####################################################################
+-- Таблицы, типы, индексы
+-- #####################################################################
 
 -- ---------------------------------------------------------------------
 -- Таблицы
 -- ---------------------------------------------------------------------
+
 CREATE TABLE crm_industries (
     id   BIGSERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL UNIQUE
@@ -69,8 +46,12 @@ CREATE TABLE crm_stages (
     probability INT NOT NULL CHECK (probability BETWEEN 0 AND 100),
     is_closed   BOOLEAN NOT NULL DEFAULT FALSE,
     is_won      BOOLEAN NOT NULL DEFAULT FALSE,
+    tone        VARCHAR(20) NOT NULL DEFAULT 'neutral'
+        CHECK (tone IN ('neutral', 'accent', 'attention', 'success', 'done', 'danger')),
     CHECK (NOT is_won OR is_closed)
 );
+
+COMMENT ON COLUMN crm_stages.tone IS 'Stage badge color: neutral, accent, attention, success, done, danger';
 
 CREATE TABLE crm_activity_kinds (
     code       VARCHAR(20) PRIMARY KEY CHECK (code ~ '^[a-z_]+$'),
@@ -90,7 +71,9 @@ CREATE TABLE crm_companies (
     owner_login VARCHAR(50) NOT NULL REFERENCES pgerp.users(login) ON UPDATE CASCADE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
 CREATE UNIQUE INDEX crm_companies_name_key ON crm_companies (lower(name));
+
 CREATE INDEX crm_companies_owner_idx ON crm_companies (owner_login);
 
 CREATE TABLE crm_contacts (
@@ -102,6 +85,7 @@ CREATE TABLE crm_contacts (
     email      VARCHAR(200),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
 CREATE INDEX crm_contacts_company_idx ON crm_contacts (company_id);
 
 -- Группы товаров и услуг: дерево любой глубины
@@ -110,6 +94,7 @@ CREATE TABLE crm_product_groups (
     parent_id BIGINT REFERENCES crm_product_groups(id),
     name      VARCHAR(100) NOT NULL CHECK (trim(name) <> '')
 );
+
 CREATE UNIQUE INDEX crm_product_groups_name_idx ON crm_product_groups (COALESCE(parent_id, 0), lower(name));
 
 CREATE TABLE crm_products (
@@ -120,6 +105,7 @@ CREATE TABLE crm_products (
     unit     VARCHAR(20) NOT NULL DEFAULT 'pcs',
     price    NUMERIC(12,2) NOT NULL CHECK (price >= 0)
 );
+
 CREATE INDEX crm_products_group_idx ON crm_products (group_id);
 
 CREATE TABLE crm_deals (
@@ -134,8 +120,11 @@ CREATE TABLE crm_deals (
     lost_reason    TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
 CREATE INDEX crm_deals_company_idx ON crm_deals (company_id);
+
 CREATE INDEX crm_deals_owner_idx ON crm_deals (owner_login);
+
 CREATE INDEX crm_deals_stage_idx ON crm_deals (stage_id);
 
 CREATE TABLE crm_deal_lines (
@@ -146,6 +135,7 @@ CREATE TABLE crm_deal_lines (
     price      NUMERIC(12,2) NOT NULL CHECK (price >= 0),
     discount   NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (discount BETWEEN 0 AND 100)
 );
+
 CREATE INDEX crm_deal_lines_deal_idx ON crm_deal_lines (deal_id);
 
 -- Задачи, звонки, встречи, письма, заметки: по сделке, по компании или сами по себе
@@ -162,8 +152,11 @@ CREATE TABLE crm_activities (
     created_by  VARCHAR(50),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
 CREATE INDEX crm_activities_owner_idx ON crm_activities (owner_login, done_at);
+
 CREATE INDEX crm_activities_deal_idx ON crm_activities (deal_id);
+
 CREATE INDEX crm_activities_company_idx ON crm_activities (company_id);
 
 -- Журнал сделки: создание, смена стадии и ответственного, выполненные задачи
@@ -174,6 +167,7 @@ CREATE TABLE crm_deal_events (
     login   VARCHAR(50),
     text    TEXT NOT NULL
 );
+
 CREATE INDEX crm_deal_events_deal_idx ON crm_deal_events (deal_id, at);
 
 -- Снимок открытой на редактирование сделки; state IS NULL — сделка создана в этой карточке
@@ -183,9 +177,14 @@ CREATE TABLE crm_deal_snapshots (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- #####################################################################
+-- Функции
+-- #####################################################################
+
 -- ---------------------------------------------------------------------
 -- Видимость и общие функции
 -- ---------------------------------------------------------------------
+
 -- Руководитель отдела и администратор видят всё; без пользователя (консоль, миграции) — тоже всё
 CREATE FUNCTION crm_is_head()
 RETURNS BOOLEAN AS $$
@@ -203,142 +202,15 @@ RETURNS VARCHAR AS $$
     SELECT COALESCE((SELECT NULLIF(full_name, '') FROM pgerp.users WHERE login = p_login), p_login);
 $$ LANGUAGE sql STABLE;
 
--- Метка для колонки badge: код задаёт цвет, подпись — на языке пользователя
-CREATE FUNCTION crm_badge(p_code TEXT, p_label TEXT)
-RETURNS JSONB AS $$
-    SELECT jsonb_build_object('code', p_code, 'label', ui_t(p_label));
-$$ LANGUAGE sql STABLE;
-
 CREATE FUNCTION crm_date(p_date DATE)
 RETURNS TEXT AS $$
     SELECT to_char(p_date, 'DD.MM.YYYY');
 $$ LANGUAGE sql STABLE;
 
 -- ---------------------------------------------------------------------
--- Представления (видимость — здесь: менеджер получает только свои сделки и задачи)
--- ---------------------------------------------------------------------
--- Ответственные: менеджеры, руководители и сам пользователь (например, администратор)
-CREATE VIEW crm_owners_v AS
-SELECT u.id, u.login, COALESCE(NULLIF(u.full_name, ''), u.login) AS name
-FROM pgerp.users u
-WHERE u.is_active
-  AND (pgerp.auth_has_role(u.id, 'crm_manager') OR pgerp.auth_has_role(u.id, 'crm_head') OR u.login = ui_user());
-
-CREATE VIEW crm_companies_v AS
-SELECT c.id, c.name, c.inn, c.industry_id, i.name AS industry, c.phone, c.email, c.website, c.address,
-       c.owner_login, crm_user_name(c.owner_login) AS owner,
-       (SELECT count(*) FROM crm_deals d JOIN crm_stages s ON s.id = d.stage_id
-        WHERE d.company_id = c.id AND NOT s.is_closed) AS open_deals,
-       lower(concat_ws(' ', c.name, c.inn, c.phone, c.email)) AS search_text
-FROM crm_companies c
-LEFT JOIN crm_industries i ON i.id = c.industry_id;
-
-CREATE VIEW crm_contacts_v AS
-SELECT ct.id, ct.company_id, co.name AS company, ct.full_name, ct.position, ct.phone, ct.email,
-       lower(concat_ws(' ', ct.full_name, co.name, ct.phone, ct.email)) AS search_text
-FROM crm_contacts ct
-JOIN crm_companies co ON co.id = ct.company_id;
-
-CREATE VIEW crm_deal_lines_v AS
-SELECT l.id, l.deal_id, l.product_id, p.name AS product, p.sku, p.unit, l.quantity, l.price, l.discount,
-       round(l.quantity * l.price * (1 - l.discount / 100), 2) AS amount
-FROM crm_deal_lines l
-JOIN crm_products p ON p.id = l.product_id;
-
-CREATE VIEW crm_deals_v AS
-SELECT d.id, d.title, d.company_id, co.name AS company, d.contact_id, ct.full_name AS contact,
-       d.stage_id, s.code AS stage_code, s.sort_order AS stage_order, crm_badge(s.code, s.name) AS stage,
-       s.probability, s.is_closed, s.is_won,
-       d.owner_login, crm_user_name(d.owner_login) AS owner,
-       COALESCE(a.amount, 0) AS amount,
-       round(COALESCE(a.amount, 0) * s.probability / 100, 2) AS weighted,
-       d.expected_close, crm_date(d.expected_close) AS close_date,
-       (NOT s.is_closed AND d.expected_close < current_date) AS is_overdue,
-       d.closed_on, d.lost_reason, d.created_at,
-       lower(concat_ws(' ', d.title, co.name)) AS search_text
-FROM crm_deals d
-JOIN crm_companies co ON co.id = d.company_id
-JOIN crm_stages s ON s.id = d.stage_id
-LEFT JOIN crm_contacts ct ON ct.id = d.contact_id
-LEFT JOIN (SELECT deal_id, sum(amount) AS amount FROM crm_deal_lines_v GROUP BY deal_id) a ON a.deal_id = d.id
-WHERE crm_can_see(d.owner_login);
-
--- Состояние задачи: выполнена, просрочена, на сегодня, запланирована
-CREATE VIEW crm_activities_v AS
-SELECT a.id, a.kind, ui_t(k.name) AS kind_name, a.subject, a.notes,
-       a.due_on, crm_date(a.due_on) AS due, COALESCE(a.due_on, DATE '9999-12-31') AS due_sort,
-       x.state_code, crm_badge(x.state_code, x.state_name) AS state,
-       a.done_at IS NOT NULL AS is_done, a.done_at,
-       a.deal_id, d.title AS deal,
-       COALESCE(a.company_id, d.company_id) AS company_id, co.name AS company,
-       COALESCE(d.title, co.name) AS related,
-       a.owner_login, crm_user_name(a.owner_login) AS owner,
-       lower(concat_ws(' ', a.subject, d.title, co.name)) AS search_text
-FROM crm_activities a
-JOIN crm_activity_kinds k ON k.code = a.kind
-LEFT JOIN crm_deals d ON d.id = a.deal_id
-LEFT JOIN crm_companies co ON co.id = COALESCE(a.company_id, d.company_id)
-CROSS JOIN LATERAL (
-    SELECT CASE WHEN a.done_at IS NOT NULL THEN 'done'
-                WHEN a.due_on < current_date THEN 'overdue'
-                WHEN a.due_on = current_date THEN 'today'
-                ELSE 'open' END AS state_code,
-           CASE WHEN a.done_at IS NOT NULL THEN 'Completed'
-                WHEN a.due_on < current_date THEN 'Overdue'
-                WHEN a.due_on = current_date THEN 'Today'
-                ELSE 'Planned' END AS state_name) x
-WHERE crm_can_see(a.owner_login);
-
-CREATE VIEW crm_deal_events_v AS
-SELECT e.id, e.deal_id, e.at, to_char(e.at, 'DD.MM.YYYY HH24:MI') AS at_text,
-       COALESCE(crm_user_name(e.login), ui_t('system')) AS author, ui_t(e.text) AS text
-FROM crm_deal_events e;
-
--- Группы на языке пользователя (названия демо-групп переводятся, свои — как есть) — для дерева
-CREATE VIEW crm_product_groups_t AS
-SELECT id, parent_id, ui_t(name) AS title FROM crm_product_groups;
-
--- Группы с путём от корня («Services / Implementation») и id предков — для списков выбора и фильтра товаров
-CREATE VIEW crm_product_groups_v AS
-WITH RECURSIVE g AS (
-    SELECT id, parent_id, name, ui_t(name) AS path, ARRAY[id] AS ids
-    FROM crm_product_groups WHERE parent_id IS NULL
-    UNION ALL
-    SELECT c.id, c.parent_id, c.name, g.path || ' / ' || ui_t(c.name), g.ids || c.id
-    FROM crm_product_groups c JOIN g ON c.parent_id = g.id
-)
-SELECT id, parent_id, name, path, ids FROM g;
-
-CREATE VIEW crm_products_v AS
-SELECT p.id, p.group_id, g.path AS group_path, g.ids AS group_ids, p.name, p.sku, p.unit, p.price,
-       ui_money_input(p.price) AS price_input, lower(concat_ws(' ', p.name, p.sku)) AS search_text
-FROM crm_products p
-JOIN crm_product_groups_v g ON g.id = p.group_id;
-
--- Воронка по стадиям — по видимым сделкам
-CREATE VIEW crm_pipeline_v AS
-SELECT s.id, s.sort_order, crm_badge(s.code, s.name) AS stage, ui_t(s.name) AS stage_name, s.probability,
-       count(d.id) AS deals, COALESCE(sum(d.amount), 0) AS amount, COALESCE(sum(d.weighted), 0) AS weighted
-FROM crm_stages s
-LEFT JOIN crm_deals_v d ON d.stage_id = s.id
-GROUP BY s.id;
-
-CREATE VIEW crm_pipeline_owners_v AS
-SELECT u.id, u.login, COALESCE(NULLIF(u.full_name, ''), u.login) AS owner,
-       count(d.id) FILTER (WHERE NOT d.is_closed) AS open_deals,
-       COALESCE(sum(d.amount) FILTER (WHERE NOT d.is_closed), 0) AS open_amount,
-       COALESCE(sum(d.weighted) FILTER (WHERE NOT d.is_closed), 0) AS weighted,
-       COALESCE(sum(d.amount) FILTER (WHERE d.is_won AND d.closed_on >= date_trunc('month', current_date)), 0)
-           AS won_month,
-       (SELECT count(*) FROM crm_activities_v a WHERE a.owner_login = u.login AND a.state_code = 'overdue')
-           AS overdue_tasks
-FROM pgerp.users u
-JOIN crm_deals_v d ON d.owner_login = u.login
-GROUP BY u.id;
-
--- ---------------------------------------------------------------------
 -- Списки выбора
 -- ---------------------------------------------------------------------
+
 -- Стадии — в порядке воронки, а не по алфавиту
 CREATE FUNCTION crm_stages_combo(p_data JSON)
 RETURNS JSON AS $$
@@ -376,6 +248,7 @@ $$ LANGUAGE sql STABLE;
 -- ---------------------------------------------------------------------
 -- Компании
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION crm_companies_page(p_data JSON)
 RETURNS JSON AS $$
     SELECT ui_grid_page('crm_companies_page', p_data, 'crm_companies_v', NULL, 'name', 'asc',
@@ -533,6 +406,7 @@ $$ LANGUAGE sql;
 -- ---------------------------------------------------------------------
 -- Контакты
 -- ---------------------------------------------------------------------
+
 -- company_id — фильтр, когда список открыт для выбора контакта компании
 CREATE FUNCTION crm_contacts_page(p_data JSON)
 RETURNS JSON AS $$
@@ -651,6 +525,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Товары и услуги
 -- ---------------------------------------------------------------------
+
 -- Дерево групп: корень «Все товары и услуги» (id all), под ним — группы. Выбранный узел — мастер таблицы товаров
 CREATE FUNCTION crm_product_groups_tree(p_data JSON)
 RETURNS JSON AS $$
@@ -843,6 +718,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Сделки
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION crm_deals_page(p_data JSON)
 RETURNS JSON AS $$
     SELECT ui_grid_page('crm_deals_page', p_data, 'crm_deals_v', NULL, 'close_date', 'asc',
@@ -1251,6 +1127,7 @@ $$ LANGUAGE sql;
 -- ---------------------------------------------------------------------
 -- Товары в сделке
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION crm_deal_lines_page(p_data JSON)
 RETURNS JSON AS $$
     SELECT ui_grid_page('crm_deal_lines_page', p_data, 'crm_deal_lines_v', 'deal_id', 'id', 'asc');
@@ -1334,6 +1211,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Задачи, звонки, встречи
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION crm_activity_refresh()
 RETURNS JSONB AS $$
     SELECT jsonb_build_array(
@@ -1551,6 +1429,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Воронка продаж
 -- ---------------------------------------------------------------------
+
 CREATE FUNCTION crm_pipeline_page(p_data JSON)
 RETURNS JSON AS $$
     SELECT ui_grid_page('crm_pipeline_page', p_data, 'crm_pipeline_v', NULL, 'stage', 'asc');
@@ -1578,6 +1457,7 @@ $$ LANGUAGE plpgsql;
 -- ---------------------------------------------------------------------
 -- Данные отчётов PDF
 -- ---------------------------------------------------------------------
+
 -- Коммерческое предложение: {"deal_id"}
 CREATE FUNCTION crm_offer_data(p_data JSON)
 RETURNS JSON AS $$
@@ -1628,15 +1508,268 @@ RETURNS JSON AS $$
 $$ LANGUAGE sql STABLE;
 
 -- ---------------------------------------------------------------------
+-- Триггеры (после демо-данных): журнал сделки, дата закрытия, обновление списков во всех вкладках
+-- ---------------------------------------------------------------------
+
+-- Закрывающая стадия ставит дату закрытия, открытая — снимает её и причину проигрыша
+CREATE FUNCTION crm_deals_before()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_stage crm_stages%ROWTYPE;
+BEGIN
+    SELECT * INTO v_stage FROM crm_stages WHERE id = NEW.stage_id;
+    IF v_stage.is_closed THEN
+        IF TG_OP = 'INSERT' OR NEW.stage_id IS DISTINCT FROM OLD.stage_id THEN
+            NEW.closed_on := current_date;
+        END IF;
+    ELSE
+        NEW.closed_on := NULL;
+        NEW.lost_reason := NULL;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION crm_deals_log()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO crm_deal_events (deal_id, login, text) VALUES (NEW.id, ui_user(), 'Deal created');
+        RETURN NULL;
+    END IF;
+    IF NEW.stage_id IS DISTINCT FROM OLD.stage_id THEN
+        INSERT INTO crm_deal_events (deal_id, login, text)
+        SELECT NEW.id, ui_user(), format('Stage: %s → %s', f.name, t.name)
+        FROM crm_stages f, crm_stages t WHERE f.id = OLD.stage_id AND t.id = NEW.stage_id;
+    END IF;
+    IF NEW.owner_login IS DISTINCT FROM OLD.owner_login THEN
+        INSERT INTO crm_deal_events (deal_id, login, text)
+        VALUES (NEW.id, ui_user(), format('Owner: %s → %s',
+                                          crm_user_name(OLD.owner_login), crm_user_name(NEW.owner_login)));
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Списки сделок и задач обновляются во всех вкладках, где они открыты (каждая перечитывает свою видимость)
+CREATE FUNCTION crm_deals_push()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM ui_push_to('crm_deals', ui_refresh_grid('crm_deals_grid', p_keep_page => TRUE));
+    PERFORM ui_push_to('crm_dashboard', ui_refresh_grid('crm_my_deals_grid', p_keep_page => TRUE));
+    PERFORM ui_push_to('crm_pipeline', ui_refresh_grid('crm_pipeline_chart'),
+                                       ui_refresh_grid('crm_pipeline_grid', p_keep_page => TRUE),
+                                       ui_refresh_grid('crm_pipeline_owners_grid', p_keep_page => TRUE));
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE FUNCTION crm_activities_push()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM ui_push_to('crm_tasks', ui_refresh_grid('crm_tasks_grid', p_keep_page => TRUE));
+    PERFORM ui_push_to('crm_dashboard', ui_refresh_grid('crm_my_tasks_grid', p_keep_page => TRUE));
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- #####################################################################
+-- Представления и триггеры
+-- #####################################################################
+
+-- ---------------------------------------------------------------------
+-- Представления (видимость — здесь: менеджер получает только свои сделки и задачи)
+-- ---------------------------------------------------------------------
+
+-- Ответственные: менеджеры, руководители и сам пользователь (например, администратор)
+CREATE VIEW crm_owners_v AS
+SELECT u.id, u.login, COALESCE(NULLIF(u.full_name, ''), u.login) AS name
+FROM pgerp.users u
+WHERE u.is_active
+  AND (pgerp.auth_has_role(u.id, 'crm_manager') OR pgerp.auth_has_role(u.id, 'crm_head') OR u.login = ui_user());
+
+CREATE VIEW crm_companies_v AS
+SELECT c.id, c.name, c.inn, c.industry_id, i.name AS industry, c.phone, c.email, c.website, c.address,
+       c.owner_login, crm_user_name(c.owner_login) AS owner,
+       (SELECT count(*) FROM crm_deals d JOIN crm_stages s ON s.id = d.stage_id
+        WHERE d.company_id = c.id AND NOT s.is_closed) AS open_deals,
+       lower(concat_ws(' ', c.name, c.inn, c.phone, c.email)) AS search_text
+FROM crm_companies c
+LEFT JOIN crm_industries i ON i.id = c.industry_id;
+
+CREATE VIEW crm_contacts_v AS
+SELECT ct.id, ct.company_id, co.name AS company, ct.full_name, ct.position, ct.phone, ct.email,
+       lower(concat_ws(' ', ct.full_name, co.name, ct.phone, ct.email)) AS search_text
+FROM crm_contacts ct
+JOIN crm_companies co ON co.id = ct.company_id;
+
+CREATE VIEW crm_deal_lines_v AS
+SELECT l.id, l.deal_id, l.product_id, p.name AS product, p.sku, p.unit, l.quantity, l.price, l.discount,
+       round(l.quantity * l.price * (1 - l.discount / 100), 2) AS amount
+FROM crm_deal_lines l
+JOIN crm_products p ON p.id = l.product_id;
+
+CREATE VIEW crm_deals_v AS
+SELECT d.id, d.title, d.company_id, co.name AS company, d.contact_id, ct.full_name AS contact,
+       d.stage_id, s.code AS stage_code, s.sort_order AS stage_order, ui_badge(s.name, s.tone) AS stage,
+       s.probability, s.is_closed, s.is_won,
+       d.owner_login, crm_user_name(d.owner_login) AS owner,
+       COALESCE(a.amount, 0) AS amount,
+       round(COALESCE(a.amount, 0) * s.probability / 100, 2) AS weighted,
+       d.expected_close, crm_date(d.expected_close) AS close_date,
+       (NOT s.is_closed AND d.expected_close < current_date) AS is_overdue,
+       d.closed_on, d.lost_reason, d.created_at,
+       lower(concat_ws(' ', d.title, co.name)) AS search_text
+FROM crm_deals d
+JOIN crm_companies co ON co.id = d.company_id
+JOIN crm_stages s ON s.id = d.stage_id
+LEFT JOIN crm_contacts ct ON ct.id = d.contact_id
+LEFT JOIN (SELECT deal_id, sum(amount) AS amount FROM crm_deal_lines_v GROUP BY deal_id) a ON a.deal_id = d.id
+WHERE crm_can_see(d.owner_login);
+
+-- Состояние задачи: выполнена, просрочена, на сегодня, запланирована
+CREATE VIEW crm_activities_v AS
+SELECT a.id, a.kind, ui_t(k.name) AS kind_name, a.subject, a.notes,
+       a.due_on, crm_date(a.due_on) AS due, COALESCE(a.due_on, DATE '9999-12-31') AS due_sort,
+       x.state_code, ui_badge(x.state_name, x.state_tone) AS state,
+       a.done_at IS NOT NULL AS is_done, a.done_at,
+       a.deal_id, d.title AS deal,
+       COALESCE(a.company_id, d.company_id) AS company_id, co.name AS company,
+       COALESCE(d.title, co.name) AS related,
+       a.owner_login, crm_user_name(a.owner_login) AS owner,
+       lower(concat_ws(' ', a.subject, d.title, co.name)) AS search_text
+FROM crm_activities a
+JOIN crm_activity_kinds k ON k.code = a.kind
+LEFT JOIN crm_deals d ON d.id = a.deal_id
+LEFT JOIN crm_companies co ON co.id = COALESCE(a.company_id, d.company_id)
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN a.done_at IS NOT NULL THEN 'done'
+                WHEN a.due_on < current_date THEN 'overdue'
+                WHEN a.due_on = current_date THEN 'today'
+                ELSE 'open' END AS state_code,
+           CASE WHEN a.done_at IS NOT NULL THEN 'Completed'
+                WHEN a.due_on < current_date THEN 'Overdue'
+                WHEN a.due_on = current_date THEN 'Today'
+                ELSE 'Planned' END AS state_name,
+           CASE WHEN a.done_at IS NOT NULL THEN 'success'
+                WHEN a.due_on < current_date THEN 'danger'
+                WHEN a.due_on = current_date THEN 'attention'
+                ELSE 'neutral' END AS state_tone) x
+WHERE crm_can_see(a.owner_login);
+
+CREATE VIEW crm_deal_events_v AS
+SELECT e.id, e.deal_id, e.at, to_char(e.at, 'DD.MM.YYYY HH24:MI') AS at_text,
+       COALESCE(crm_user_name(e.login), ui_t('system')) AS author, ui_t(e.text) AS text
+FROM crm_deal_events e;
+
+-- Группы на языке пользователя (названия демо-групп переводятся, свои — как есть) — для дерева
+CREATE VIEW crm_product_groups_t AS
+SELECT id, parent_id, ui_t(name) AS title FROM crm_product_groups;
+
+-- Группы с путём от корня («Services / Implementation») и id предков — для списков выбора и фильтра товаров
+CREATE VIEW crm_product_groups_v AS
+WITH RECURSIVE g AS (
+    SELECT id, parent_id, name, ui_t(name) AS path, ARRAY[id] AS ids
+    FROM crm_product_groups WHERE parent_id IS NULL
+    UNION ALL
+    SELECT c.id, c.parent_id, c.name, g.path || ' / ' || ui_t(c.name), g.ids || c.id
+    FROM crm_product_groups c JOIN g ON c.parent_id = g.id
+)
+SELECT id, parent_id, name, path, ids FROM g;
+
+CREATE VIEW crm_products_v AS
+SELECT p.id, p.group_id, g.path AS group_path, g.ids AS group_ids, p.name, p.sku, p.unit, p.price,
+       ui_money_input(p.price) AS price_input, lower(concat_ws(' ', p.name, p.sku)) AS search_text
+FROM crm_products p
+JOIN crm_product_groups_v g ON g.id = p.group_id;
+
+-- Воронка по стадиям — по видимым сделкам
+CREATE VIEW crm_pipeline_v AS
+SELECT s.id, s.sort_order, ui_badge(s.name, s.tone) AS stage, ui_t(s.name) AS stage_name, s.probability,
+       count(d.id) AS deals, COALESCE(sum(d.amount), 0) AS amount, COALESCE(sum(d.weighted), 0) AS weighted
+FROM crm_stages s
+LEFT JOIN crm_deals_v d ON d.stage_id = s.id
+GROUP BY s.id;
+
+CREATE VIEW crm_pipeline_owners_v AS
+SELECT u.id, u.login, COALESCE(NULLIF(u.full_name, ''), u.login) AS owner,
+       count(d.id) FILTER (WHERE NOT d.is_closed) AS open_deals,
+       COALESCE(sum(d.amount) FILTER (WHERE NOT d.is_closed), 0) AS open_amount,
+       COALESCE(sum(d.weighted) FILTER (WHERE NOT d.is_closed), 0) AS weighted,
+       COALESCE(sum(d.amount) FILTER (WHERE d.is_won AND d.closed_on >= date_trunc('month', current_date)), 0)
+           AS won_month,
+       (SELECT count(*) FROM crm_activities_v a WHERE a.owner_login = u.login AND a.state_code = 'overdue')
+           AS overdue_tasks
+FROM pgerp.users u
+JOIN crm_deals_v d ON d.owner_login = u.login
+GROUP BY u.id;
+
+-- ---------------------------------------------------------------------
+-- Триггеры (после демо-данных): журнал сделки, дата закрытия, обновление списков во всех вкладках
+-- ---------------------------------------------------------------------
+
+CREATE TRIGGER crm_deals_before BEFORE INSERT OR UPDATE OF stage_id ON crm_deals
+    FOR EACH ROW WHEN (NOT ui_in_release()) EXECUTE FUNCTION crm_deals_before();
+
+CREATE TRIGGER crm_deals_log AFTER INSERT OR UPDATE OF stage_id, owner_login ON crm_deals
+    FOR EACH ROW WHEN (NOT ui_in_release()) EXECUTE FUNCTION crm_deals_log();
+
+CREATE TRIGGER crm_deals_push AFTER INSERT OR UPDATE OR DELETE ON crm_deals
+    FOR EACH STATEMENT WHEN (NOT ui_in_release()) EXECUTE FUNCTION crm_deals_push();
+
+CREATE TRIGGER crm_deal_lines_push AFTER INSERT OR UPDATE OR DELETE ON crm_deal_lines
+    FOR EACH STATEMENT WHEN (NOT ui_in_release()) EXECUTE FUNCTION crm_deals_push();
+
+CREATE TRIGGER crm_activities_push AFTER INSERT OR UPDATE OR DELETE ON crm_activities
+    FOR EACH STATEMENT WHEN (NOT ui_in_release()) EXECUTE FUNCTION crm_activities_push();
+
+-- #####################################################################
+-- Данные
+-- #####################################################################
+
+-- ---------------------------------------------------------------------
+-- Решение
+-- ---------------------------------------------------------------------
+
+INSERT INTO pgerp.solutions (name, title, prefix, menu_folder, migration_folder, description)
+VALUES ('crm', 'CRM', 'crm_', 'CRM', 'crm', 'Companies, contacts, pipeline deals, tasks, reports')
+ON CONFLICT (name) DO UPDATE SET title = EXCLUDED.title, prefix = EXCLUDED.prefix, menu_folder = EXCLUDED.menu_folder,
+    migration_folder = EXCLUDED.migration_folder, description = EXCLUDED.description;
+
+-- ---------------------------------------------------------------------
+-- Роли и демо-пользователи
+-- ---------------------------------------------------------------------
+
+INSERT INTO pgerp.roles (role_name, title) VALUES
+    ('crm_manager', 'Sales manager'),
+    ('crm_head',    'Head of sales')
+ON CONFLICT (role_name) DO NOTHING;
+
+-- Пароль — случайный, никому не известный: войти можно после того, как администратор задаст пароль
+INSERT INTO pgerp.users (login, full_name, password_hash, must_change_password) VALUES
+    ('ivanov',  'Ivan Ivanov',     pgerp.auth_hash(gen_random_uuid()::TEXT), TRUE),
+    ('petrova', 'Maria Petrova',   pgerp.auth_hash(gen_random_uuid()::TEXT), TRUE),
+    ('sidorov', 'Alexey Sidorov', pgerp.auth_hash(gen_random_uuid()::TEXT), TRUE)
+ON CONFLICT (login) DO NOTHING;
+
+INSERT INTO pgerp.user_roles (user_id, role_id)
+SELECT u.id, r.id
+FROM (VALUES ('ivanov', 'crm_manager'), ('petrova', 'crm_manager'), ('sidorov', 'crm_head')) AS t(login, role)
+JOIN pgerp.users u ON u.login = t.login
+JOIN pgerp.roles r ON r.role_name = t.role
+ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------
 -- Справочники
 -- ---------------------------------------------------------------------
-INSERT INTO crm_stages (id, code, name, sort_order, probability, is_closed, is_won) VALUES
-    (1, 'new',         'New',        1, 10,  FALSE, FALSE),
-    (2, 'qualified',   'Qualification', 2, 25,  FALSE, FALSE),
-    (3, 'proposal',    'Proposal',  3, 50,  FALSE, FALSE),
-    (4, 'negotiation', 'Negotiation',   4, 75,  FALSE, FALSE),
-    (5, 'won',         'Won',     5, 100, TRUE,  TRUE),
-    (6, 'lost',        'Lost',    6, 0,   TRUE,  FALSE);
+
+INSERT INTO crm_stages (id, code, name, sort_order, probability, is_closed, is_won, tone) VALUES
+    (1, 'new',         'New',        1, 10,  FALSE, FALSE, 'accent'),
+    (2, 'qualified',   'Qualification', 2, 25,  FALSE, FALSE, 'attention'),
+    (3, 'proposal',    'Proposal',  3, 50,  FALSE, FALSE, 'done'),
+    (4, 'negotiation', 'Negotiation',   4, 75,  FALSE, FALSE, 'done'),
+    (5, 'won',         'Won',     5, 100, TRUE,  TRUE, 'success'),
+    (6, 'lost',        'Lost',    6, 0,   TRUE,  FALSE, 'danger');
 
 INSERT INTO crm_activity_kinds (code, name, sort_order) VALUES
     ('call',    'Call',  1),
@@ -1672,6 +1805,7 @@ INSERT INTO crm_products (id, group_id, name, sku, unit, price) VALUES
 -- ---------------------------------------------------------------------
 -- Демо-данные (даты — относительно дня установки)
 -- ---------------------------------------------------------------------
+
 INSERT INTO crm_companies (id, name, inn, industry_id, phone, email, website, address, owner_login, created_at) VALUES
     (1,  'North Wind LLC',     '7701234567', 1, '+7 495 100-10-10', 'info@sever-veter.ru', 'sever-veter.ru', '12 Tverskaya St, Moscow',      'ivanov',  now() - interval '120 days'),
     (2,  'Uralmash Service JSC',      '6601234568', 2, '+7 343 200-20-20', 'office@uralmash-s.ru', 'uralmash-s.ru', '18 Kosmonavtov Ave, Yekaterinburg', 'petrova', now() - interval '110 days'),
@@ -1771,6 +1905,7 @@ INSERT INTO crm_activities (kind, subject, notes, due_on, done_at, deal_id, comp
 
 INSERT INTO crm_deal_events (deal_id, at, login, text)
 SELECT id, created_at, owner_login, 'Deal created' FROM crm_deals;
+
 INSERT INTO crm_deal_events (deal_id, at, login, text) VALUES
     (1,  now() - interval '30 days', 'ivanov',  'Stage: Proposal → Negotiation'),
     (2,  (current_date - 5)::TIMESTAMPTZ + interval '15 hours', 'ivanov', 'Stage: Negotiation → Won'),
@@ -1784,92 +1919,23 @@ INSERT INTO crm_deal_events (deal_id, at, login, text) VALUES
     (17, (current_date - 9)::TIMESTAMPTZ + interval '10 hours', 'petrova', 'Loss reason: Project postponed until next year');
 
 SELECT setval(pg_get_serial_sequence('crm_stages', 'id'), (SELECT max(id) FROM crm_stages));
+
 SELECT setval(pg_get_serial_sequence('crm_industries', 'id'), (SELECT max(id) FROM crm_industries));
+
 SELECT setval(pg_get_serial_sequence('crm_product_groups', 'id'), (SELECT max(id) FROM crm_product_groups));
+
 SELECT setval(pg_get_serial_sequence('crm_products', 'id'), (SELECT max(id) FROM crm_products));
+
 SELECT setval(pg_get_serial_sequence('crm_companies', 'id'), (SELECT max(id) FROM crm_companies));
+
 SELECT setval(pg_get_serial_sequence('crm_contacts', 'id'), (SELECT max(id) FROM crm_contacts));
+
 SELECT setval(pg_get_serial_sequence('crm_deals', 'id'), (SELECT max(id) FROM crm_deals));
-
--- ---------------------------------------------------------------------
--- Триггеры (после демо-данных): журнал сделки, дата закрытия, обновление списков во всех вкладках
--- ---------------------------------------------------------------------
--- Закрывающая стадия ставит дату закрытия, открытая — снимает её и причину проигрыша
-CREATE FUNCTION crm_deals_before()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_stage crm_stages%ROWTYPE;
-BEGIN
-    SELECT * INTO v_stage FROM crm_stages WHERE id = NEW.stage_id;
-    IF v_stage.is_closed THEN
-        IF TG_OP = 'INSERT' OR NEW.stage_id IS DISTINCT FROM OLD.stage_id THEN
-            NEW.closed_on := current_date;
-        END IF;
-    ELSE
-        NEW.closed_on := NULL;
-        NEW.lost_reason := NULL;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE FUNCTION crm_deals_log()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF TG_OP = 'INSERT' THEN
-        INSERT INTO crm_deal_events (deal_id, login, text) VALUES (NEW.id, ui_user(), 'Deal created');
-        RETURN NULL;
-    END IF;
-    IF NEW.stage_id IS DISTINCT FROM OLD.stage_id THEN
-        INSERT INTO crm_deal_events (deal_id, login, text)
-        SELECT NEW.id, ui_user(), format('Stage: %s → %s', f.name, t.name)
-        FROM crm_stages f, crm_stages t WHERE f.id = OLD.stage_id AND t.id = NEW.stage_id;
-    END IF;
-    IF NEW.owner_login IS DISTINCT FROM OLD.owner_login THEN
-        INSERT INTO crm_deal_events (deal_id, login, text)
-        VALUES (NEW.id, ui_user(), format('Owner: %s → %s',
-                                          crm_user_name(OLD.owner_login), crm_user_name(NEW.owner_login)));
-    END IF;
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
--- Списки сделок и задач обновляются во всех вкладках, где они открыты (каждая перечитывает свою видимость)
-CREATE FUNCTION crm_deals_push()
-RETURNS TRIGGER AS $$
-BEGIN
-    PERFORM ui_push_to('crm_deals', ui_refresh_grid('crm_deals_grid', p_keep_page => TRUE));
-    PERFORM ui_push_to('crm_dashboard', ui_refresh_grid('crm_my_deals_grid', p_keep_page => TRUE));
-    PERFORM ui_push_to('crm_pipeline', ui_refresh_grid('crm_pipeline_chart'),
-                                       ui_refresh_grid('crm_pipeline_grid', p_keep_page => TRUE),
-                                       ui_refresh_grid('crm_pipeline_owners_grid', p_keep_page => TRUE));
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE FUNCTION crm_activities_push()
-RETURNS TRIGGER AS $$
-BEGIN
-    PERFORM ui_push_to('crm_tasks', ui_refresh_grid('crm_tasks_grid', p_keep_page => TRUE));
-    PERFORM ui_push_to('crm_dashboard', ui_refresh_grid('crm_my_tasks_grid', p_keep_page => TRUE));
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER crm_deals_before BEFORE INSERT OR UPDATE OF stage_id ON crm_deals
-    FOR EACH ROW EXECUTE FUNCTION crm_deals_before();
-CREATE TRIGGER crm_deals_log AFTER INSERT OR UPDATE OF stage_id, owner_login ON crm_deals
-    FOR EACH ROW EXECUTE FUNCTION crm_deals_log();
-CREATE TRIGGER crm_deals_push AFTER INSERT OR UPDATE OR DELETE ON crm_deals
-    FOR EACH STATEMENT EXECUTE FUNCTION crm_deals_push();
-CREATE TRIGGER crm_deal_lines_push AFTER INSERT OR UPDATE OR DELETE ON crm_deal_lines
-    FOR EACH STATEMENT EXECUTE FUNCTION crm_deals_push();
-CREATE TRIGGER crm_activities_push AFTER INSERT OR UPDATE OR DELETE ON crm_activities
-    FOR EACH STATEMENT EXECUTE FUNCTION crm_activities_push();
 
 -- ---------------------------------------------------------------------
 -- Действия
 -- ---------------------------------------------------------------------
+
 INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system, everyone) VALUES
     ('crm_stages_combo',              'crm_stages_combo',              'CRM: pipeline stages list',                        FALSE, FALSE),
     ('crm_owners_combo',              'crm_owners_combo',              'CRM: owners list',                         FALSE, FALSE),
@@ -1944,6 +2010,7 @@ INSERT INTO pgerp.ui_actions (action_name, function_name, description, is_system
 -- ---------------------------------------------------------------------
 -- Формы
 -- ---------------------------------------------------------------------
+
 INSERT INTO pgerp.forms (form_name, title, cancel_action, folder) VALUES
     ('crm_dashboard',  'Dashboard',          NULL, 'CRM'),
     ('crm_deals',      'Deals',                NULL, 'CRM'),
@@ -2221,10 +2288,9 @@ WHERE r.role_name IN ('crm_manager', 'crm_head')
 UNION ALL
 SELECT r.id, 'crm_pipeline' FROM pgerp.roles r WHERE r.role_name = 'crm_head';
 
--- Меню: папка CRM — первой
-UPDATE pgerp.menu_items SET sort_order = sort_order + 1 WHERE parent_id IS NULL;
+-- Меню: папка CRM — первой (папки ядра и других решений начинаются с 1)
 WITH root AS (
-    INSERT INTO pgerp.menu_items (parent_id, sort_order, title, form_name) VALUES (NULL, 1, 'CRM', NULL)
+    INSERT INTO pgerp.menu_items (parent_id, sort_order, title, form_name) VALUES (NULL, 0, 'CRM', NULL)
     RETURNING id
 )
 INSERT INTO pgerp.menu_items (parent_id, sort_order, title, form_name)
@@ -2241,6 +2307,7 @@ CROSS JOIN (VALUES (1, 'Dashboard',    'crm_dashboard'),
 -- ---------------------------------------------------------------------
 -- Отчёты PDF
 -- ---------------------------------------------------------------------
+
 INSERT INTO pgerp.reports (name, title, data_action, sample_params, jrxml) VALUES
 ('crm_offer', 'Commercial offer', 'crm_offer_data', '{"deal_id": 12}', $jrxml$<jasperReport name="crm_offer" pageWidth="595" pageHeight="842" columnWidth="515" leftMargin="40" rightMargin="40" topMargin="40" bottomMargin="30">
 	<!-- Commercial proposal for a deal: parameters come from crm_offer_data, rows are the deal products and services -->
@@ -2473,6 +2540,7 @@ $jrxml$);
 -- ---------------------------------------------------------------------
 -- Переводы
 -- ---------------------------------------------------------------------
+
 INSERT INTO pgerp.translations (lang, source, translation) VALUES
     ('ru', 'Companies, contacts, pipeline deals, tasks, reports', 'Компании, контакты, сделки по воронке, задачи, отчёты'),
     ('ru', 'No.', '№'),

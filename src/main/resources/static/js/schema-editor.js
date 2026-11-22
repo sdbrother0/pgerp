@@ -108,7 +108,7 @@ export function createSchemaEditor(root, { getSolution = () => '', solutions = (
 
 	function solutionField() {
 		return field(t('Solution'), select([['', t('— by name prefix —')],
-			...solutions().filter((s) => !s.is_core).map((s) => [s.name, s.prefix ? `${s.title} (${s.prefix}…)` : s.title])],
+			...solutions().map((s) => [s.name, s.prefix ? `${s.title} (${s.prefix}…)` : s.title])],
 		current.solution ?? '', (v) => { current.solution = v || null; changed(); }),
 		t('If the name lacks a solution prefix, the object joins the selected solution explicitly'));
 	}

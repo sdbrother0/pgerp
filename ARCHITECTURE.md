@@ -224,7 +224,7 @@ A message is `{"form": form name or null, "ui_instructions": [...], "users"?: [l
 limit). A rolled-back transaction sends nothing; identical messages of one transaction arrive once. Messages are not
 stored: a tab closed at the moment of sending does not receive it. `ui_push` can be called from handlers, triggers,
 jobs and the console. Only signed-in users can subscribe; with the `users` field (`ui_push_to_user`, `ui_push_to_role`)
-only the tabs of those users receive the message. On sign-out the subscriptions of the session's tabs are closed.
+only the tabs of those users receive the message; a long list of users is split into several notifications. On sign-out the subscriptions of the session's tabs are closed.
 
 ## Message panel
 
@@ -366,11 +366,11 @@ flowchart LR
 A solution is an application module (`pgerp.solutions`): a title, a **prefix** of object names (`crm_`), a top-level menu
 folder, a package folder and a **database schema** (`db_schema`) for its tables, views and functions. An object (table, view, sequence, function, enum, form, action, report, role) belongs to
 a solution if its name starts with the prefix (the longest one wins) or if it was added explicitly
-(`pgerp.solution_objects`: objects without a prefix, as in the examples). Core objects (schema `pgerp`, administration
-forms, the `admin` role) belong to the read-only `core` solution. Reference tables whose rows are needed on every
+(`pgerp.solution_objects`: objects without a prefix, as in the examples). The core is not a solution: see
+"The core and solutions" below. Reference tables whose rows are needed on every
 installation (stages, types) are marked in `pgerp.solution_data`.
 
-The core migration creates only the `core` solution. CRM and the examples are **solution packages**
+The core migration creates no solutions. CRM and the examples are **solution packages**
 (see "Migrations and solution packages"): installing a package creates the solution, its schema and objects and records
 its releases. A new solution made in the editor gets its schema at creation (by default — the solution name).
 
@@ -614,6 +614,25 @@ be unique across solutions — that is what the prefix is for. Core objects are 
 `CREATE FUNCTION pgerp.ui_...`, `INSERT INTO pgerp.ui_actions ...`; without it a function would land in the first schema
 of the path, and an application table with the same name would shadow the core table.
 
+### The core and solutions
+
+The core is never a part of a solution:
+
+- functions of schema `pgerp` and the forms, actions, reports, roles and menu folders listed in `pgerp.core_objects` do not
+  appear among solution objects, cannot be assigned to a solution and are not deleted when it is reinstalled;
+- a solution function cannot have the name of a core function: the path puts solution schemas first, so it would replace it;
+- a solution release and the SQL console are rolled back if they change the core or create such a function;
+- `core` and `pgerp` are not allowed as solution names.
+
+While a release runs, `ui_in_release()` is true: triggers of journals and notifications skip release data with
+`CREATE TRIGGER … WHEN (NOT ui_in_release())`, as CRM does — demo data is not a user action.
+
+This protects from development mistakes, not from the database owner, who can change the check itself. A core migration
+that adds a form, action, report, role or menu folder adds it to `pgerp.core_objects`.
+
+The version: `SELECT pgerp.pgerp_version();` — the `pom.xml` version of the application that last started on the database
+(written by `afterMigrate__version.sql` at every start).
+
 ## Core data model
 
 ```mermaid
@@ -839,11 +858,11 @@ VALUES ('item_save', 'item_save', 'Save an item');
 
 ## Migrations and solution packages
 
-**The core** is installed by Flyway at application start: `db/migration/V1__core.sql` and the migrations after it — schema
+**The core** is installed by Flyway at application start: `db/migration/V1__core.sql` (one migration since 0.4.0) — schema
 `pgerp`, `pgcrypto`, core tables, functions and views, system actions, administration forms and the "Administration"
 menu item, languages, themes, the `admin` role and the first administrator, translations of core texts, the solution
-development tools and the MCP server. A core change is the next migration in `db/migration`; applied migrations never
-change. The core (database, Java, client) knows nothing about specific solutions: no names, texts, colours or styles of
+development tools and the MCP server. A core change after 0.4.0 is the next migration in `db/migration`; applied migrations never
+change. Databases created before 0.4.0 are not upgraded: the application refuses to start on them and changes nothing. The core (database, Java, client) knows nothing about specific solutions: no names, texts, colours or styles of
 CRM or the examples — everything a solution needs is in its package.
 
 **Application solutions** are packages in `src/main/resources/db/solutions/<folder>/`:
@@ -927,7 +946,7 @@ docker compose down               # stop; data stays in the db-data volume (down
 Compose settings — environment variables or an `.env` file next to `compose.yaml`: `ERP_BIND` (host address, default `127.0.0.1` —
 this computer only; `0.0.0.0` — all interfaces, after the admin password is changed), `ERP_PORT` (port on the host,
 default `8099`; inside the container the application listens on `8080`), `ERP_DB_PASSWORD` (default `postgres`; the password of the `pgerp` role), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
-`ERP_MCP_ALLOWED_ORIGINS`. The database port is not published; uncomment `ports` of the `db` service to connect with psql
+`ERP_MCP_ALLOWED_ORIGINS`, `ERP_TRUSTED_PROXIES`. The database port is not published; uncomment `ports` of the `db` service to connect with psql
 as `pgerp`.
 
 In compose the application works as the `pgerp` role without superuser rights. The `db-init` service creates it on every
@@ -946,7 +965,8 @@ The server listens on all network interfaces; the client calls the server with r
 | <nobr>`ERP_DB_URL`</nobr>, <nobr>`ERP_DB_USER`</nobr>, <nobr>`ERP_DB_PASSWORD`</nobr> | <nobr>`jdbc:postgresql://localhost:5432/erp`</nobr>, <nobr>`postgres`</nobr>, empty | Database |
 | <nobr>`SERVER_PORT`</nobr> | <nobr>`8080`</nobr> | Application port |
 | <nobr>`SERVER_SERVLET_CONTEXT_PATH`</nobr> | empty (root) | Application path, for example <nobr>`/erp`</nobr> → <nobr>`https://host/erp/`</nobr> |
-| <nobr>`ERP_FORWARD_HEADERS`</nobr> | <nobr>`native`</nobr> | Use <nobr>`X-Forwarded-Proto/Host/Port`</nobr> from a reverse proxy (<nobr>`none`</nobr> — ignore) |
+| <nobr>`ERP_FORWARD_HEADERS`</nobr> | <nobr>`native`</nobr> | Use <nobr>`X-Forwarded-Proto/Host/Port`</nobr> from a reverse proxy (<nobr>`none`</nobr> — ignore; <nobr>`framework`</nobr> trusts any client — do not use it on an open port) |
+| <nobr>`ERP_TRUSTED_PROXIES`</nobr> | <nobr>`127.0.0.0/8,::1/128`</nobr> | Proxies whose <nobr>`X-Forwarded-*`</nobr> are trusted: networks with a mask, comma-separated; empty — none |
 | <nobr>`ERP_ALLOWED_ORIGINS`</nobr> | empty | Browser addresses allowed to subscribe to the WebSocket if they differ from the request address |
 | <nobr>`ERP_FLYWAY_LOCATIONS`</nobr> | <nobr>`classpath:db/migration`</nobr> | Core migrations |
 | <nobr>`ERP_DEV_SOLUTIONS_DIR`</nobr> | empty | The project packages folder (<nobr>`…/src/main/resources/db/solutions`</nobr>): "Create release" and MCP save release files there, installation reads packages from it before the application ones; empty — the file is downloaded |
@@ -956,8 +976,13 @@ The server listens on all network interfaces; the client calls the server with r
 **Behind a reverse proxy with HTTPS** (nginx, Traefik) the proxy passes `X-Forwarded-Proto`, `X-Forwarded-Host`,
 `X-Forwarded-Port` and the WebSocket headers. Tomcat (`native`) uses them to restore the address opened in the browser:
 the redirect to sign-in goes to `https://…`, the session and CSRF cookies get `Secure`, and the WebSocket `Origin` check
-passes. The headers are accepted only from proxies in internal networks (10.*, 172.16–31.*, 192.168.*, 127.*); a proxy with
-another address is listed in `server.tomcat.remoteip.internal-proxies`. Without `X-Forwarded-*` the subscription to
+passes; `X-Forwarded-For` gives the client address by which failed sign-ins are counted. A client can write anything into
+these headers, so they are accepted only from `ERP_TRUSTED_PROXIES`, by default a proxy on the same computer. In compose
+a proxy on the host is seen as the network gateway:
+`docker network inspect pgerp_default -f '{{(index .IPAM.Config 0).Gateway}}'` (on Docker Desktop the address differs),
+set it as `ERP_TRUSTED_PROXIES=<address>/32`. All connections through the published port come from that address, so trust
+it only while the port is bound to 127.0.0.1. Without
+`X-Forwarded-*` the subscription to
 database commands is rejected (403): the browser sends an `Origin` with the proxy address while the application sees its
 own. If the proxy does not pass these headers — `ERP_ALLOWED_ORIGINS=https://erp.example.com`.
 
@@ -984,7 +1009,9 @@ location /erp/ {
 | Docker image | <nobr>`docker build -t pgerp .`</nobr> | Image on JRE 25 (`Dockerfile`) |
 
 `.github/scripts/db_smoke.py` checks the built jar on a real PostgreSQL in CI and before a release is published: a fresh
-installation and an upgrade from 0.2.1, in temporary databases.
+installation, sessions and sign-in, the boundary between the core and solutions, and that a database created before 0.4.0
+is refused unchanged; in temporary databases. `.github/scripts/compose_smoke.sh` installs with `compose.yaml` and the image
+built from the sources.
 
 Tests need PostgreSQL with an `erp` database (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); without one, package with
 `-DskipTests`.

@@ -268,7 +268,6 @@ const MESSAGES = {
 		'Database schema': 'Схема базы',
 		'Tables, views and functions of the solution; defaults to the solution name': 'Таблицы, представления и функции решения; по умолчанию — имя решения',
 		'Set on creation': 'Задаётся при создании',
-		'The platform core changes only through core migrations: only its contents are shown here.': 'Ядро платформы меняется только миграциями ядра: здесь — только его состав.',
 		'Save the solution — then its contents and releases will appear.': 'Сохраните решение — затем появятся его состав и выпуски.',
 		'explicitly': 'явно',
 		'by prefix': 'по префиксу',

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Проверка собранного jar на настоящем PostgreSQL.
 
-Чистая установка и обновление с опубликованной 0.2.1 через HTTP, как из браузера. Работает во временных базах,
+Чистая установка через HTTP, как из браузера; граница ядра и решений; отказ на базе до 0.4.0. Работает во временных базах,
 которые сама создаёт и удаляет; приложение — под ролью без прав суперпользователя, созданной скриптом db-init
 из compose.yaml. Нужны java, psql, docker compose и PostgreSQL на ERP_SMOKE_HOST:ERP_SMOKE_PORT (localhost:5432, postgres/postgres).
 
     python3 .github/scripts/db_smoke.py target/pgerp-<версия>.jar
 """
 import contextlib
-import hashlib
 import http.cookiejar
 import json
 import os
@@ -23,8 +22,6 @@ import urllib.parse
 import urllib.request
 import uuid
 
-BASELINE_URL = "https://github.com/sdbrother0/pgerp/releases/download/v0.2.1/pgerp-0.2.1.jar"
-BASELINE_SHA256 = "f6130016605cc6518ec5d2069a8b4195032251a51ed80739a9db8fa12473279a"
 HOST = os.environ.get("ERP_SMOKE_HOST", "localhost")
 PORT = os.environ.get("ERP_SMOKE_PORT", "5432")
 USER = os.environ.get("ERP_DB_USER", "postgres")
@@ -150,14 +147,6 @@ def application(jar, database, role=None):
                 process.kill()
 
 
-def baseline(folder):
-    path = os.path.join(folder, "baseline.jar")
-    urllib.request.urlretrieve(BASELINE_URL, path)
-    with open(path, "rb") as file:
-        check(hashlib.sha256(file.read()).hexdigest() == BASELINE_SHA256, "baseline 0.2.1 checksum")
-    return path
-
-
 def fresh_install(jar, version):
     print("## fresh installation", flush=True)
     with temporary_database() as db:
@@ -225,6 +214,7 @@ def fresh_checks(app, db, version):
           "MCP installation needs a password change", result)
 
     security_checks(app, db)
+    boundary_checks(app, db, version)
 
 
 def security_checks(app, db):
@@ -272,68 +262,81 @@ def security_checks(app, db):
     psql(db, "UPDATE pgerp.users SET locked_until = NULL WHERE login = 'admin'")
     check(app.other().login(NEW_PASSWORD)[0] == 200, "saving the user card unlocks sign-in")
 
+    psql(db, """INSERT INTO pgerp.users (login, password_hash)
+                SELECT 'colleague_' || i, 'x' FROM generate_series(1, 1200) i;
+                INSERT INTO pgerp.roles (role_name, title) VALUES ('crowd', 'Crowd');
+                INSERT INTO pgerp.user_roles (user_id, role_id)
+                SELECT u.id, r.id FROM pgerp.users u, pgerp.roles r
+                WHERE u.login LIKE 'colleague%' AND r.role_name = 'crowd'""")
+    got = subprocess.run(
+        ["psql", "-X", "-q", "-h", HOST, "-p", PORT, "-U", USER, "-d", db, "-v", "ON_ERROR_STOP=1", "-At",
+         "-c", "LISTEN erp_ui",
+         "-c", "SET search_path = public, pgerp",
+         "-c", "SELECT pgerp.ui_push_to_role('crowd', pgerp.ui_message('hello'))",
+         "-c", "SELECT 1"],
+        env={**os.environ, "PGPASSWORD": PASSWORD}, capture_output=True, text=True)
+    sent = re.findall(r'with payload "(.*)" received', got.stdout + got.stderr)
+    logins = [login for message in sent for login in json.loads(message)["users"]]
+    check(got.returncode == 0 and sorted(logins) == sorted(f"colleague_{i}" for i in range(1, 1201)),
+          "push to a big role reaches each user once", got.stderr[-600:] or len(logins))
+    check(len(sent) > 1 and all(len(message.encode()) <= 7900 for message in sent), "push parts fit into NOTIFY", len(sent))
+
     check(psql(db, "SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls FROM pg_roles WHERE rolname = current_user",
                db, db) == "f", "application role is not privileged")
     check(psql(db, "SELECT pg_has_role('pg_execute_server_program', 'member')", db, db) == "f",
           "application role cannot run server programs")
 
 
-def upgrade(old_jar, jar, version):
-    print("## upgrade from 0.2.1", flush=True)
+def boundary_checks(app, db, version):
+    print("## core and solutions", flush=True)
+    psql(db, "UPDATE pgerp.users SET lang = 'en' WHERE login = 'admin'")
+    check(psql(db, "SELECT pgerp.pgerp_version()") == version, "pgerp_version() returns the application version")
+    result = app.action("solution_list")
+    names = [s["name"] for s in result[1]["solutions"]]
+    check(result[0] == 200 and "core" not in names, "the core is not a solution", names)
+    result = app.action("solution_object_set", {"type": "form", "name": "users", "solution": "crm"})
+    check(result[0] != 200 or result[1].get("status") == "error", "a core form cannot join a solution", result)
+    check(psql(db, "SELECT count(*) FROM pgerp.dev_objects WHERE object_name IN ('users', 'roles', 'session_get', 'admin')") == "0",
+          "core objects are not solution objects")
+
+    def sql_run(text):
+        status, body = app.action("sql_run", {"sql": text})
+        return status, body.get("mode"), str(body.get("error") or body.get("message"))
+    result = sql_run("CREATE FUNCTION public.ui_ok() RETURNS int LANGUAGE sql AS 'SELECT 1'")
+    check(result[1] == "error" and "taken by the platform core" in result[2], "console cannot shadow a core function", result)
+    check(psql(db, "SELECT count(*) FROM pg_proc WHERE proname = 'ui_ok' AND pronamespace <> 'pgerp'::regnamespace") == "0",
+          "no shadowing function was left")
+    result = sql_run("CREATE OR REPLACE FUNCTION pgerp.ui_t_exact(p_text TEXT) RETURNS TEXT LANGUAGE sql AS 'SELECT p_text'")
+    check(result[1] == "error" and "core migrations" in result[2], "console cannot change a core function", result)
+    release = ("SELECT pgerp.solution_release_apply('crm', 99, 'x', $r$UPDATE pgerp.ui_actions SET description = 'taken' "
+               "WHERE action_name = 'session_get'$r$)")
+    result = sql_run(release)
+    check(result[1] == "error" and "core migrations" in result[2], "a release cannot change a core action", result)
+    check(psql(db, "SELECT description <> 'taken' FROM pgerp.ui_actions WHERE action_name = 'session_get'") == "t",
+          "core action is intact")
+    result = app.action("solution_object_set", {"type": "form", "name": "users", "solution": "examples"})
+    check(result[0] != 200 or result[1].get("status") == "error", "a core form cannot join the solution being reinstalled", result)
+    result = app.install("examples", None, True)
+    check(result[0] == 200, "solution reinstalled", result)
+    check(psql(db, "SELECT count(*) FROM pgerp.forms WHERE form_name IN ('users', 'roles')") == "2",
+          "reinstalling a solution keeps the core forms")
+    result = app.action("solution_save", {"is_new": True, "name": "intruder", "title": "Intruder", "migration_folder": "intruder",
+                                          "menu_folder": "Administration"})
+    check(result[0] != 200 or result[1].get("status") == "error", "a solution cannot take the core menu folder", result)
+
+
+def old_database(jar):
+    print("## database of a version before 0.4.0", flush=True)
     with temporary_database() as db:
-        with application(old_jar, db) as app:
-            check(app.login("admin")[0] == 200, "0.2.1: admin signs in")
-            check(app.change_password()[0] == 200, "0.2.1: password changed")
-            result = app.install("crm")
-            check(result[0] == 200, "0.2.1: CRM installed", result)
-            psql(db, "CREATE TABLE crm.user_data AS SELECT 7 AS n")
-            psql(db, """CREATE TYPE crm.state AS ENUM ('a', 'b');
-                        CREATE DOMAIN crm.positive AS int CHECK (VALUE > 0);
-                        CREATE TYPE crm.pair AS (a int, b int);
-                        CREATE TYPE crm.span AS RANGE (subtype = int8);
-                        CREATE SEQUENCE crm.free_seq;
-                        CREATE TABLE crm.numbered (id int GENERATED ALWAYS AS IDENTITY, n serial);
-                        CREATE TABLE crm.parts (id int) PARTITION BY RANGE (id);
-                        CREATE TABLE crm.parts_1 PARTITION OF crm.parts FOR VALUES FROM (0) TO (10);
-                        CREATE MATERIALIZED VIEW crm.totals AS SELECT 1 AS n;
-                        CREATE PROCEDURE crm.noop() LANGUAGE sql AS 'SELECT 1';
-                        CREATE AGGREGATE crm.total(int) (SFUNC = int4pl, STYPE = int);
-                        CREATE FUNCTION crm.on_ddl() RETURNS event_trigger LANGUAGE plpgsql AS 'BEGIN END';
-                        CREATE EVENT TRIGGER smoke_ddl ON ddl_command_end EXECUTE FUNCTION crm.on_ddl()""")
-        provision(db, db)
-        provision(db, db)
-        check(psql(db, "SELECT evtenabled FROM pg_event_trigger WHERE evtname = 'smoke_ddl'") == "D",
-              "event triggers of the superuser are disabled")
-        left = psql(db, """SELECT string_agg(x, ', ') FROM (
-            SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-            WHERE n.nspname IN ('public', 'pgerp', 'crm') AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
-              AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype = 'e')
-            UNION ALL
-            SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-            WHERE n.nspname IN ('public', 'pgerp', 'crm') AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
-              AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
-            UNION ALL
-            SELECT t.oid::regtype::text FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-            WHERE n.nspname IN ('public', 'pgerp', 'crm') AND t.typowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
-              AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.deptype = 'e')
-            ) o(x)""")
-        check(left == "", "everything is owned by the application role", left)
-        with application(jar, db, db) as app:
-            for number in ("2", "3"):
-                check(psql(db, f"SELECT success FROM flyway_schema_history WHERE version = '{number}'") == "t",
-                      f"migration V{number} applied")
-            check(app.login(NEW_PASSWORD)[0] == 200, "password survives the upgrade")
-            result = app.request("api/version")
-            check(result == (200, {"version": version}), "version is shown after the upgrade", result)
-            result = app.action("menu_get")
-            check(result[0] == 200 and result[1]["items"], "menu works", result)
-            check(psql(db, "SELECT n FROM crm.user_data") == "7", "data survives the upgrade")
-            result = app.install("examples")
-            check(result[0] == 200, "another solution installs after the upgrade", result)
-            result = app.install("crm", None, True)
-            check(result[0] == 200, "solution of an old installation is reinstalled by the new role", result)
-        with application(jar, db, db) as app:
-            check(app.login(NEW_PASSWORD)[0] == 200, "restart on the migrated database")
+        psql(db, "CREATE SCHEMA pgerp; CREATE TABLE pgerp.ui_actions (action_name text); "
+                 "CREATE TABLE public.flyway_schema_history (installed_rank int)")
+        env = {**os.environ, "ERP_DB_URL": f"jdbc:postgresql://{HOST}:{PORT}/{db}", "ERP_DB_USER": USER,
+               "ERP_DB_PASSWORD": PASSWORD, "SERVER_PORT": "0", "SERVER_ADDRESS": "127.0.0.1"}
+        result = subprocess.run(["java", "-jar", jar], env=env, capture_output=True, text=True, timeout=180)
+        check(result.returncode != 0 and "created by PgERP before 0.4.0" in result.stdout + result.stderr,
+              "the application refuses an old database", result.stdout[-1500:])
+        check(psql(db, "SELECT count(*) FROM pg_proc WHERE pronamespace = 'pgerp'::regnamespace") == "0",
+              "the old database is not changed")
 
 
 def main():
@@ -341,10 +344,8 @@ def main():
         raise SystemExit(__doc__)
     jar = os.path.abspath(sys.argv[1])
     version = re.fullmatch(r"pgerp-(.+)\.jar", os.path.basename(jar)).group(1)
-    with tempfile.TemporaryDirectory() as folder:
-        old_jar = baseline(folder)
-        fresh_install(jar, version)
-        upgrade(old_jar, jar, version)
+    fresh_install(jar, version)
+    old_database(jar)
     print("database smoke test passed")
 
 

@@ -79,14 +79,20 @@ public class UiPushBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	/** Сообщение базы — адресатам из поля {@code users} или, без него, всем подписчикам. */
+	/**
+	 * Сообщение базы — адресатам из поля {@code users} или, без него, всем подписчикам.
+	 * Непонятное сообщение не получает никто: кому оно предназначалось, неизвестно.
+	 */
 	public void broadcast(String message) {
-		Set<String> revoked = logins(message, "revoked_users");
-		if (revoked != null) {
-			closeUsers(revoked);
+		JsonNode root = parse(message);
+		if (root == null) {
 			return;
 		}
-		Set<String> users = logins(message, "users");
+		if (root.has("revoked_users")) {
+			closeUsers(logins(root.get("revoked_users")));
+			return;
+		}
+		Set<String> users = root.has("users") ? logins(root.get("users")) : null;
 		TextMessage text = new TextMessage(message);
 		for (Subscriber subscriber : this.subscribers) {
 			if (users == null || users.contains(userName(subscriber.session))) {
@@ -136,23 +142,31 @@ public class UiPushBroadcaster extends TextWebSocketHandler {
 		}
 	}
 
-	/** Логины из поля сообщения; {@code null} — поля нет. */
-	private Set<String> logins(String message, String field) {
+	private JsonNode parse(String message) {
 		try {
-			JsonNode users = this.jsonMapper.readTree(message).get(field);
-			if (users == null || !users.isArray()) {
-				return null;
+			JsonNode root = this.jsonMapper.readTree(message);
+			if (root.isObject()) {
+				return root;
 			}
-			Set<String> result = new HashSet<>();
-			for (JsonNode user : users) {
-				result.add(user.asString());
-			}
-			return result;
+			logger.warn("UI command from database is not a JSON object, dropped");
 		}
 		catch (JacksonException ex) {
-			logger.warn("UI command from database is not valid JSON: {}", ex.getOriginalMessage());
-			return null;
+			logger.warn("UI command from database is not valid JSON, dropped: {}", ex.getOriginalMessage());
 		}
+		return null;
+	}
+
+	/** Логины из списка; всё, что не строка, — не адресат, поле не списком — адресатов нет. */
+	private static Set<String> logins(JsonNode list) {
+		Set<String> result = new HashSet<>();
+		if (list.isArray()) {
+			for (JsonNode login : list) {
+				if (login.isString()) {
+					result.add(login.asString());
+				}
+			}
+		}
+		return result;
 	}
 
 	private static String userName(WebSocketSession session) {

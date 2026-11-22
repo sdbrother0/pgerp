@@ -16,7 +16,7 @@ import { showSolutionPackages } from './solution-packages.js';
  * Возвращает { open(name), dirty, name }.
  */
 export function createSolutionEditor(root, { onNavigate = () => {}, onChanged = () => {} } = {}) {
-	let solution = null;   // {is_new, name, title, prefix, menu_folder, migration_folder, db_schema, description, is_core, counts}
+	let solution = null;   // {is_new, name, title, prefix, menu_folder, migration_folder, db_schema, description, counts}
 	let objects = [];
 	let unassigned = [];
 	let releases = [];
@@ -57,10 +57,9 @@ export function createSolutionEditor(root, { onNavigate = () => {}, onChanged = 
 	// -----------------------------------------------------------------
 	function render() {
 		dirtyMark.hidden = !dirty;
-		const readOnly = solution.is_core;
 		const heading = el('h3', { className: 'report-heading', textContent: solution.title || solution.name || t('New solution') });
-		const saveButton = button(t('Save'), save, { className: 'primary', disabled: readOnly });
-		const deleteButton = button(t('Delete'), remove, { className: 'danger', disabled: solution.is_new || readOnly,
+		const saveButton = button(t('Save'), save, { className: 'primary' });
+		const deleteButton = button(t('Delete'), remove, { className: 'danger', disabled: solution.is_new,
 			title: t('The solution is deleted; its objects stay in the database') });
 		const toolbar = el('div', { className: 'toolbar' }, heading, spacer(), dirtyMark,
 			button(t('Install solutions'), () => guard(installPackages), { title: t('Solution packages shipped with the application: install and update') }),
@@ -69,27 +68,21 @@ export function createSolutionEditor(root, { onNavigate = () => {}, onChanged = 
 		const props = el('div', { className: 'report-fields dev-fields' },
 			field(t('Name'), input(solution.name, (v) => { solution.name = v.trim(); changed(); },
 				{ disabled: !solution.is_new, spellcheck: false, placeholder: 'my_app' }), t('Latin letters, digits and _')),
-			field(t('Title'), input(solution.title, (v) => { solution.title = v; changed(); }, { disabled: readOnly })),
+			field(t('Title'), input(solution.title, (v) => { solution.title = v; changed(); })),
 			field(t('Prefix'), input(solution.prefix, (v) => { solution.prefix = v.trim() || null; changed(); },
-				{ disabled: readOnly, spellcheck: false, placeholder: 'my_app_' }), t('Objects whose names start with it belong to the solution automatically')),
+				{ spellcheck: false, placeholder: 'my_app_' }), t('Objects whose names start with it belong to the solution automatically')),
 			field(t('Menu folder'), input(solution.menu_folder, (v) => { solution.menu_folder = v.trim() || null; changed(); },
-				{ disabled: readOnly }), t('Top-level menu folder that a release carries over')),
+				{}), t('Top-level menu folder that a release carries over')),
 			field(t('Database schema'), input(solution.db_schema, (v) => { solution.db_schema = v.trim() || null; changed(); },
 				{ disabled: !solution.is_new, spellcheck: false, placeholder: solution.name || 'my_app' }),
 				solution.is_new ? t('Tables, views and functions of the solution; defaults to the solution name') : t('Set on creation')),
 			field(t('Package folder'), input(solution.migration_folder, (v) => { solution.migration_folder = v.trim() || null; changed(); },
-				{ disabled: readOnly, spellcheck: false, placeholder: solution.name || 'my_app' }), t('db/solutions/<folder>; defaults to the solution name')),
-			field(t('Description'), input(solution.description, (v) => { solution.description = v || null; changed(); }, { disabled: readOnly })));
+				{ spellcheck: false, placeholder: solution.name || 'my_app' }), t('db/solutions/<folder>; defaults to the solution name')),
+			field(t('Description'), input(solution.description, (v) => { solution.description = v || null; changed(); })));
 
 		const parts = [toolbar, props];
-		if (readOnly) {
-			parts.push(hint(t('The platform core changes only through core migrations: only its contents are shown here.')));
-		}
 		if (!solution.is_new) {
-			parts.push(renderObjects(readOnly));
-			if (!readOnly) {
-				parts.push(renderRelease(), renderHistory());
-			}
+			parts.push(renderObjects(), renderRelease(), renderHistory());
 		}
 		else {
 			parts.push(hint(t('Save the solution — then its contents and releases will appear.')));
@@ -97,16 +90,16 @@ export function createSolutionEditor(root, { onNavigate = () => {}, onChanged = 
 		canvas.replaceChildren(...parts);
 	}
 
-	function renderObjects(readOnly) {
+	function renderObjects() {
 		const counts = Object.entries(solution.counts ?? {}).map(([type, n]) => `${objectTypeLabel(type)}: ${n}`).join(' · ');
 		const rows = objects.map((o) => [
 			objectTypeLabel(o.type),
 			el('code', { textContent: o.name }),
 			o.explicit ? t('explicitly') : t('by prefix'),
-			o.type === 'table' && !readOnly
+			o.type === 'table'
 				? checkbox(o.data, (v) => setData(o.name, v), { title: t('Carry the table rows in a release (reference data)') })
 				: '',
-			o.explicit && !readOnly ? button(t('Exclude'), () => setObject(o, '')) : '',
+			o.explicit ? button(t('Exclude'), () => setObject(o, '')) : '',
 		]);
 		const add = el('select');
 		add.add(new Option(t('— object outside solutions —'), ''));
@@ -122,7 +115,7 @@ export function createSolutionEditor(root, { onNavigate = () => {}, onChanged = 
 		return section(t('Contents'),
 			hint(counts || t('No objects yet: create tables and forms with the solution prefix or add objects explicitly.')),
 			objects.length ? table([t('Type'), t('Name'), t('Included'), t('Data'), ''], rows, 'dev-objects') : null,
-			readOnly ? null : el('div', { className: 'toolbar dev-inline' }, add, addButton,
+			el('div', { className: 'toolbar dev-inline' }, add, addButton,
 				hint(unassigned.length ? t('Objects outside solutions: {0}', unassigned.length) : t('All objects belong to solutions'))));
 	}
 
@@ -339,6 +332,6 @@ export function createSolutionEditor(root, { onNavigate = () => {}, onChanged = 
 
 /** Подпись решения для списков: «Моё приложение (my_app)». */
 export function solutionLabel(s) {
-	return s.is_core ? `${s.title}` : `${s.title} (${s.name})`;
+	return `${s.title} (${s.name})`;
 }
 

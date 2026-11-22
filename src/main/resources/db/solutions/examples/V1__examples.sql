@@ -1,5 +1,5 @@
 -- =====================================================================
--- Пакет решения «Примеры», выпуск 1: небольшие примеры возможностей платформы
+-- Пакет решения «Примеры»: небольшие примеры возможностей платформы
 -- =====================================================================
 --  * Hello World — кнопка и сообщение на языке пользователя (ui_t с подстановкой).
 --  * Деление — проверки ввода (ui_require), ошибка с инструкциями (ui_error).
@@ -11,53 +11,9 @@
 -- общего префикса имён, поэтому входят в решение явно (pgerp.solution_objects).
 -- Выпуск применяется один раз: на базе, где он уже записан (pgerp.solution_releases), он пропускается.
 SELECT pgerp.solution_release_apply('examples', 1, 'Examples', $release$
--- Решение
-INSERT INTO pgerp.solutions (name, title, prefix, menu_folder, migration_folder, description)
-VALUES ('examples', 'Examples', NULL, 'Examples', 'examples', 'Hello World, division, falling blocks, chat')
-ON CONFLICT (name) DO UPDATE SET title = EXCLUDED.title, prefix = EXCLUDED.prefix, menu_folder = EXCLUDED.menu_folder,
-    migration_folder = EXCLUDED.migration_folder, description = EXCLUDED.description;
-DELETE FROM pgerp.solution_objects WHERE solution = 'examples';
-INSERT INTO pgerp.solution_objects (object_type, object_name, solution) VALUES
-    ('action', 'chat_announce', 'examples'),
-    ('action', 'chat_page', 'examples'),
-    ('action', 'chat_send', 'examples'),
-    ('action', 'division_run', 'examples'),
-    ('action', 'game_down', 'examples'),
-    ('action', 'game_drop', 'examples'),
-    ('action', 'game_left', 'examples'),
-    ('action', 'game_pause', 'examples'),
-    ('action', 'game_right', 'examples'),
-    ('action', 'game_start', 'examples'),
-    ('action', 'hello_run', 'examples'),
-    ('form', 'chat', 'examples'),
-    ('form', 'division', 'examples'),
-    ('form', 'falling_blocks', 'examples'),
-    ('form', 'hello_world', 'examples'),
-    ('function', 'chat_announce', 'examples'),
-    ('function', 'chat_page', 'examples'),
-    ('function', 'chat_send', 'examples'),
-    ('function', 'division_parse', 'examples'),
-    ('function', 'division_run', 'examples'),
-    ('function', 'game_current', 'examples'),
-    ('function', 'game_down', 'examples'),
-    ('function', 'game_drop', 'examples'),
-    ('function', 'game_free', 'examples'),
-    ('function', 'game_height', 'examples'),
-    ('function', 'game_land', 'examples'),
-    ('function', 'game_left', 'examples'),
-    ('function', 'game_move', 'examples'),
-    ('function', 'game_pause', 'examples'),
-    ('function', 'game_response', 'examples'),
-    ('function', 'game_right', 'examples'),
-    ('function', 'game_rows', 'examples'),
-    ('function', 'game_spawn', 'examples'),
-    ('function', 'game_start', 'examples'),
-    ('function', 'game_width', 'examples'),
-    ('function', 'hello_run', 'examples'),
-    ('table', 'chat_messages', 'examples'),
-    ('view', 'chat_messages_v', 'examples')
-ON CONFLICT (object_type, object_name) DO UPDATE SET solution = EXCLUDED.solution;
-DELETE FROM pgerp.solution_data WHERE solution = 'examples';
+-- #####################################################################
+-- Таблицы, типы, индексы
+-- #####################################################################
 
 -- Таблицы
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -67,6 +23,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chat_messages_pkey PRIMARY KEY (id)
 );
+
+-- #####################################################################
+-- Функции
+-- #####################################################################
 
 -- Функции
 CREATE OR REPLACE FUNCTION chat_announce(p_data json)
@@ -348,6 +308,10 @@ BEGIN
 END;
 $function$;
 
+-- #####################################################################
+-- Представления и триггеры
+-- #####################################################################
+
 -- Представления
 CREATE OR REPLACE VIEW chat_messages_v AS
  SELECT id,
@@ -355,6 +319,57 @@ CREATE OR REPLACE VIEW chat_messages_v AS
     text,
     to_char(created_at, 'DD.MM HH24:MI:SS'::text) AS sent_at
    FROM chat_messages;
+
+-- #####################################################################
+-- Данные
+-- #####################################################################
+
+-- Решение
+INSERT INTO pgerp.solutions (name, title, prefix, menu_folder, migration_folder, description)
+VALUES ('examples', 'Examples', NULL, 'Examples', 'examples', 'Hello World, division, falling blocks, chat')
+ON CONFLICT (name) DO UPDATE SET title = EXCLUDED.title, prefix = EXCLUDED.prefix, menu_folder = EXCLUDED.menu_folder,
+    migration_folder = EXCLUDED.migration_folder, description = EXCLUDED.description;
+
+INSERT INTO pgerp.solution_objects (object_type, object_name, solution) VALUES
+    ('action', 'chat_announce', 'examples'),
+    ('action', 'chat_page', 'examples'),
+    ('action', 'chat_send', 'examples'),
+    ('action', 'division_run', 'examples'),
+    ('action', 'game_down', 'examples'),
+    ('action', 'game_drop', 'examples'),
+    ('action', 'game_left', 'examples'),
+    ('action', 'game_pause', 'examples'),
+    ('action', 'game_right', 'examples'),
+    ('action', 'game_start', 'examples'),
+    ('action', 'hello_run', 'examples'),
+    ('form', 'chat', 'examples'),
+    ('form', 'division', 'examples'),
+    ('form', 'falling_blocks', 'examples'),
+    ('form', 'hello_world', 'examples'),
+    ('function', 'chat_announce', 'examples'),
+    ('function', 'chat_page', 'examples'),
+    ('function', 'chat_send', 'examples'),
+    ('function', 'division_parse', 'examples'),
+    ('function', 'division_run', 'examples'),
+    ('function', 'game_current', 'examples'),
+    ('function', 'game_down', 'examples'),
+    ('function', 'game_drop', 'examples'),
+    ('function', 'game_free', 'examples'),
+    ('function', 'game_height', 'examples'),
+    ('function', 'game_land', 'examples'),
+    ('function', 'game_left', 'examples'),
+    ('function', 'game_move', 'examples'),
+    ('function', 'game_pause', 'examples'),
+    ('function', 'game_response', 'examples'),
+    ('function', 'game_right', 'examples'),
+    ('function', 'game_rows', 'examples'),
+    ('function', 'game_spawn', 'examples'),
+    ('function', 'game_start', 'examples'),
+    ('function', 'game_width', 'examples'),
+    ('function', 'hello_run', 'examples'),
+    ('table', 'chat_messages', 'examples'),
+    ('view', 'chat_messages_v', 'examples')
+ON CONFLICT (object_type, object_name) DO UPDATE SET solution = EXCLUDED.solution;
 
 -- Метаданные
 INSERT INTO pgerp.ui_actions (action_name, function_name, description, everyone) VALUES
@@ -380,7 +395,6 @@ INSERT INTO pgerp.forms (form_name, title, cancel_action, folder) VALUES
 ON CONFLICT (form_name) DO UPDATE SET title = EXCLUDED.title, cancel_action = EXCLUDED.cancel_action,
     folder = EXCLUDED.folder, updated_at = now();
 
-DELETE FROM pgerp.form_components WHERE form_name IN ('chat', 'division', 'falling_blocks', 'hello_world');
 INSERT INTO pgerp.form_components (form_name, sort_order, component_type, component_name, label, action_event, master_field, tab, options) VALUES
     ('chat', '2', 'grid', 'chat_grid', 'Messages', 'chat_page', NULL, NULL, NULL),
     ('chat', '3', 'input', 'message', 'Message', NULL, NULL, NULL, NULL),
@@ -405,12 +419,10 @@ INSERT INTO pgerp.form_components (form_name, sort_order, component_type, compon
     ('hello_world', '1', 'input', 'user_name', 'Your name', NULL, NULL, NULL, NULL),
     ('hello_world', '2', 'button', 'btn_run', 'Run', 'hello_run', NULL, NULL, NULL);
 
-DELETE FROM pgerp.grid_columns WHERE action_name IN ('chat_announce', 'chat_page', 'chat_send', 'division_run', 'game_down', 'game_drop', 'game_left', 'game_pause', 'game_right', 'game_start', 'hello_run');
 INSERT INTO pgerp.grid_columns (action_name, display_order, field_name, column_title, cell_type, sort_column) VALUES
     ('chat_page', '1', 'sent_at', 'Time', 'datetime', 'id'),
     ('chat_page', '2', 'author', 'Author', 'text', 'author'),
     ('chat_page', '3', 'text', 'Message', 'text', 'text');
-DELETE FROM pgerp.grid_row_actions WHERE source_action IN ('chat_announce', 'chat_page', 'chat_send', 'division_run', 'game_down', 'game_drop', 'game_left', 'game_pause', 'game_right', 'game_start', 'hello_run');
 
 SELECT pgerp.solution_menu_apply('Examples', '[
     {

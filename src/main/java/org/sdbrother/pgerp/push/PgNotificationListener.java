@@ -12,6 +12,7 @@ import org.postgresql.PGNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
@@ -19,14 +20,15 @@ import org.springframework.stereotype.Component;
  * Слушает канал NOTIFY ({@code LISTEN erp_ui}) и передаёт каждое уведомление браузерам.
  * <p>
  * Держит одно подключение из пула на отдельном потоке; при обрыве переподключается.
- * Между уведомлениями раз в {@link #POLL_INTERVAL} отправляет браузерам heartbeat.
+ * Раз в {@link #HEARTBEAT_INTERVAL} отправляет браузерам heartbeat, в том числе когда уведомления идут непрерывно:
+ * адресное уведомление видит не каждая вкладка, а молчащее соединение закрывает прокси.
  */
 @Component
 public class PgNotificationListener implements SmartLifecycle {
 
 	private static final Logger logger = LoggerFactory.getLogger(PgNotificationListener.class);
 
-	private static final Duration POLL_INTERVAL = Duration.ofSeconds(25);
+	private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(25);
 
 	private static final Duration RECONNECT_DELAY = Duration.ofSeconds(5);
 
@@ -36,9 +38,18 @@ public class PgNotificationListener implements SmartLifecycle {
 
 	private final String channel;
 
+	private final Duration heartbeatInterval;
+
 	private volatile Thread thread;
 
+	@Autowired
 	public PgNotificationListener(DataSource dataSource, UiPushBroadcaster broadcaster, UiPushProperties properties) {
+		this(dataSource, broadcaster, properties, HEARTBEAT_INTERVAL);
+	}
+
+	PgNotificationListener(DataSource dataSource, UiPushBroadcaster broadcaster, UiPushProperties properties,
+			Duration heartbeatInterval) {
+		this.heartbeatInterval = heartbeatInterval;
 		this.dataSource = dataSource;
 		this.broadcaster = broadcaster;
 		this.channel = properties.channel();
@@ -90,14 +101,21 @@ public class PgNotificationListener implements SmartLifecycle {
 		logger.info("Listening for UI commands on channel {}", this.channel);
 		// Пока LISTEN не работал, отзыв сессий мог пройти мимо: подписки переподключаются через проверку сессии
 		this.broadcaster.closeAll();
+		long lastHeartbeat = System.nanoTime();
 		while (isRunning()) {
-			PGNotification[] notifications = pg.getNotifications((int) POLL_INTERVAL.toMillis());
-			if (notifications == null || notifications.length == 0) {
+			long untilHeartbeat = this.heartbeatInterval.toMillis()
+					- Duration.ofNanos(System.nanoTime() - lastHeartbeat).toMillis();
+			if (untilHeartbeat <= 0) {
 				this.broadcaster.heartbeat();
+				lastHeartbeat = System.nanoTime();
 				continue;
 			}
-			for (PGNotification notification : notifications) {
-				this.broadcaster.broadcast(notification.getParameter());
+			// Не 0: для драйвера это «ждать без ограничения»
+			PGNotification[] notifications = pg.getNotifications((int) untilHeartbeat);
+			if (notifications != null) {
+				for (PGNotification notification : notifications) {
+					this.broadcaster.broadcast(notification.getParameter());
+				}
 			}
 		}
 	}
