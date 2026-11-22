@@ -20,6 +20,7 @@ const MESSAGES = {
 		'Sign-in error (HTTP {0})': 'Ошибка входа (HTTP {0})',
 		'The server is unavailable': 'Сервер недоступен',
 		'PgERP — home': 'PgERP — на главную',
+		'PgERP version {0}': 'Версия PgERP {0}',
 		'Forms': 'Формы',
 		'Form editor': 'Редактор форм',
 		'Switch to “Form editor” mode': 'Переключить в режим «Редактор форм»',

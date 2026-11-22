@@ -391,6 +391,28 @@ function languageSelect(languages = []) {
 	return select;
 }
 
+/** Версия приложения рядом с логотипом. Она справочная: если не получена, страница работает без неё. */
+async function showVersion(topbar) {
+	try {
+		const response = await fetch('api/version', { headers: { Accept: 'application/json' } });
+		if (!response.ok) {
+			return;
+		}
+		const { version } = await response.json();
+		if (!version) {
+			return;
+		}
+		const label = document.createElement('span');
+		label.className = 'topbar-version';
+		label.textContent = `v${version}`;
+		label.title = t('PgERP version {0}', version);
+		topbar.querySelector('.topbar-brand')?.after(label);
+	}
+	catch {
+		// Нет связи или ответ не JSON — шапка остаётся без версии
+	}
+}
+
 /**
  * Вошедший пользователь (действие session_get): имя, «Сменить пароль» и «Выйти» в шапке;
  * переключатель в редактор форм — только администратору. Если пароль нужно сменить, сразу
@@ -412,6 +434,7 @@ export async function initSession(topbar) {
 	if (!user.is_admin) {
 		topbar.querySelector('.topbar-mode')?.remove();
 	}
+	showVersion(topbar);
 	const box = document.createElement('div');
 	box.className = 'topbar-user';
 	const name = document.createElement('span');

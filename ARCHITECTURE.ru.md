@@ -8,7 +8,7 @@ Java-сервер — тонкий шлюз, браузер — универса
 и обработчики конкретных задач) строятся поверх него и здесь не рассматриваются.
 
 **Стек:** HTML + ES modules · Java 25 · Spring Boot 4.1.2 · JdbcClient / HikariCP · WebSocket ·
-PostgreSQL 18 / PL/pgSQL · Flyway (`db/migration/V1__core.sql` — ядро) · пакеты решений (`db/solutions/<папка>`: CRM,
+PostgreSQL 18 / PL/pgSQL · Flyway (`db/migration` — ядро) · пакеты решений (`db/solutions/<папка>`: CRM,
 примеры и решения, созданные в редакторе; у каждого — своя схема базы) · MCP (Streamable HTTP) для ИИ-агентов
 
 ## Слои и компоненты
@@ -80,6 +80,7 @@ Java не разбирает JSON и не знает предметной обл
 | Вход, сессия, CSRF | <nobr>`src/main/java/org/sdbrother/pgerp/security/`</nobr> — <nobr>`SecurityConfig`</nobr>, <nobr>`DatabaseAuthenticationProvider`</nobr>, <nobr>`CsrfCookieFilter`</nobr> |
 | Контроллер действий | `src/main/java/org/sdbrother/pgerp/web/UiEventController.java` |
 | Диспетчер | `src/main/java/org/sdbrother/pgerp/dispatcher/UiEventDispatcher.java`, <nobr>`DispatcherProperties.java`</nobr> |
+| Версия приложения в шапке | `src/main/java/org/sdbrother/pgerp/web/VersionController.java` (<nobr>`GET /api/version`</nobr>, только после входа; версия — из `pom.xml` через `build-info`) |
 | Обработка ошибок | `src/main/java/org/sdbrother/pgerp/web/GatewayExceptionHandler.java` |
 | Команды из базы | <nobr>`src/main/java/org/sdbrother/pgerp/push/`</nobr> — <nobr>`PgNotificationListener`</nobr>, <nobr>`UiPushBroadcaster`</nobr>, <nobr>`UiPushWebSocketConfig`</nobr>, <nobr>`UiPushProperties`</nobr> |
 | Клиент | <nobr>`src/main/resources/static/js/ui-runtime.js`</nobr>, <nobr>`js/menu-editor.js`</nobr>, <nobr>`js/i18n.js`</nobr>, <nobr>`js/theme.js`</nobr>, <nobr>`index.html`</nobr>, <nobr>`editor.html`</nobr>, <nobr>`login.html`</nobr>, <nobr>`css/app.css`</nobr> |
@@ -822,7 +823,7 @@ VALUES ('item_save', 'item_save', 'Сохранение элемента');
 
 ## Миграции и пакеты решений
 
-**Ядро** ставит Flyway при старте приложения: одна миграция `db/migration/V1__core.sql` — схема `pgerp`, `pgcrypto`,
+**Ядро** ставит Flyway при старте приложения: `db/migration/V1__core.sql` и следующие миграции — схема `pgerp`, `pgcrypto`,
 таблицы, функции и представления ядра, системные действия, формы администрирования и пункт меню «Администрирование»,
 языки, темы, роль `admin` и первый администратор, переводы текстов ядра, средства разработки решений и MCP-сервер.
 Изменение ядра — следующая миграция в `db/migration`; применённые миграции не меняются. Ядро (база, Java, клиент)
@@ -841,7 +842,7 @@ VALUES ('item_save', 'item_save', 'Сохранение элемента');
 по умолчанию) и файлы выпусков `V<n>__….sql`, каждый — вызов `pgerp.solution_release_apply`. Пакеты читаются из
 приложения (`classpath:db/solutions`) и, при разработке, из `ERP_DEV_SOLUTIONS_DIR` (она важнее для той же папки).
 
-**Установка** (только администратор):
+**Установка** (только администратор, после смены начального пароля):
 - **первый вход** — после смены пароля администратор видит окно «Какие решения установить?»: пакеты с отметками
   и схемой для каждого; «Установить выбранные» или «Пропустить» (`pgerp.settings`, ключ `solutions_setup` — окно
   показывается один раз);
@@ -857,8 +858,9 @@ VALUES ('item_save', 'item_save', 'Сохранение элемента');
 **Чистая установка.** Флажок «Удалить схему» в окне установки (после подтверждения) ставит решение заново:
 `pgerp.solution_reset` удаляет его формы, действия, отчёты, роли, папку меню и выпуски, а схему — со всеми таблицами
 и данными (`DROP SCHEMA … CASCADE`; в `public` — только объекты решения); затем в той же транзакции применяются все
-выпуски пакета. Помогает и когда схема осталась от прежней установки (например, после чистого старта, удалившего
-только `pgerp` и `public`). Переводы и пользователи остаются.
+выпуски пакета. У ещё не установленного решения схема должна отсутствовать или быть пустой: в схеме с объектами
+могут быть чужие данные, поэтому она не удаляется. Схему, оставшуюся от прежней установки (например, после чистого
+старта, удалившего только `pgerp` и `public`), удаляют вручную. Переводы и пользователи остаются.
 
 **Чистый старт (разработка).** Чтобы начать с нуля на конкретной базе — если данные не важны и их не страшно
 потерять, — выполните в этой базе:
@@ -905,7 +907,8 @@ docker compose logs -f app
 docker compose down               # остановить; данные остаются в томе db-data (down -v удаляет их)
 ```
 
-Настройки compose — переменные окружения или файл `.env` рядом с `compose.yaml`: `ERP_PORT` (порт на хосте,
+Настройки compose — переменные окружения или файл `.env` рядом с `compose.yaml`: `ERP_BIND` (адрес на хосте, по умолчанию
+`127.0.0.1` — только этот компьютер; `0.0.0.0` — все интерфейсы, после смены пароля admin), `ERP_PORT` (порт на хосте,
 по умолчанию `8099`; внутри контейнера приложение слушает `8080`), `ERP_DB_PASSWORD` (по умолчанию `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
 `ERP_MCP_ALLOWED_ORIGINS`. Порт базы наружу не открыт; для psql раскомментируйте `ports` у сервиса `db`.
 Только образ: `docker build -t pgerp .`, затем `docker run -p 8080:8080 -e ERP_DB_URL=… -e ERP_DB_PASSWORD=… pgerp`.
@@ -955,6 +958,9 @@ location /erp/ {
 |---|---|---|
 | JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/pgerp-<версия>.jar`</nobr>, запуск <nobr>`java -jar`</nobr> |
 | Образ Docker | <nobr>`docker build -t pgerp .`</nobr> | Образ на JRE 25 (`Dockerfile`) |
+
+`.github/scripts/db_smoke.py` проверяет собранный jar на настоящем PostgreSQL в CI и перед публикацией релиза: чистая
+установка и обновление с 0.2.1, во временных базах.
 
 Тестам нужен PostgreSQL с базой `erp` (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); без него — сборка с
 `-DskipTests`.

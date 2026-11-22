@@ -8,7 +8,7 @@ sent by the database. This document describes only the platform core; applicatio
 and handlers for specific tasks) are built on top of it and are not covered here.
 
 **Stack:** HTML + ES modules · Java 25 · Spring Boot 4.1.2 · JdbcClient / HikariCP · WebSocket ·
-PostgreSQL 18 / PL/pgSQL · Flyway (`db/migration/V1__core.sql` — the core) · solution packages (`db/solutions/<folder>`:
+PostgreSQL 18 / PL/pgSQL · Flyway (`db/migration` — the core) · solution packages (`db/solutions/<folder>`:
 CRM, examples and solutions made in the editor; each in its own database schema) · MCP (Streamable HTTP) for AI agents
 
 > The platform's source language is English: interface texts, messages and metadata are written in English and translated
@@ -83,6 +83,7 @@ means rows in the metadata and a PL/pgSQL function registered in `pgerp.ui_actio
 | Sign-in, session, CSRF | <nobr>`src/main/java/org/sdbrother/pgerp/security/`</nobr> — <nobr>`SecurityConfig`</nobr>, <nobr>`DatabaseAuthenticationProvider`</nobr>, <nobr>`CsrfCookieFilter`</nobr> |
 | Action controller | `src/main/java/org/sdbrother/pgerp/web/UiEventController.java` |
 | Dispatcher | `src/main/java/org/sdbrother/pgerp/dispatcher/UiEventDispatcher.java`, <nobr>`DispatcherProperties.java`</nobr> |
+| Application version in the header | `src/main/java/org/sdbrother/pgerp/web/VersionController.java` (<nobr>`GET /api/version`</nobr>, signed-in users only; the version comes from `pom.xml` through `build-info`) |
 | Error handling | `src/main/java/org/sdbrother/pgerp/web/GatewayExceptionHandler.java` |
 | Commands from the database | <nobr>`src/main/java/org/sdbrother/pgerp/push/`</nobr> — <nobr>`PgNotificationListener`</nobr>, <nobr>`UiPushBroadcaster`</nobr>, <nobr>`UiPushWebSocketConfig`</nobr>, <nobr>`UiPushProperties`</nobr> |
 | Client | <nobr>`src/main/resources/static/js/ui-runtime.js`</nobr>, <nobr>`js/menu-editor.js`</nobr>, <nobr>`js/i18n.js`</nobr>, <nobr>`js/theme.js`</nobr>, <nobr>`index.html`</nobr>, <nobr>`editor.html`</nobr>, <nobr>`login.html`</nobr>, <nobr>`css/app.css`</nobr> |
@@ -832,7 +833,7 @@ VALUES ('item_save', 'item_save', 'Save an item');
 
 ## Migrations and solution packages
 
-**The core** is installed by Flyway at application start: a single migration `db/migration/V1__core.sql` — schema
+**The core** is installed by Flyway at application start: `db/migration/V1__core.sql` and the migrations after it — schema
 `pgerp`, `pgcrypto`, core tables, functions and views, system actions, administration forms and the "Administration"
 menu item, languages, themes, the `admin` role and the first administrator, translations of core texts, the solution
 development tools and the MCP server. A core change is the next migration in `db/migration`; applied migrations never
@@ -851,7 +852,7 @@ A package is `solution.json` (`name`, `title` and `description` — a string or 
 default schema) and release files `V<n>__….sql`, each a call of `pgerp.solution_release_apply`. Packages are read from
 the application (`classpath:db/solutions`) and, in development, from `ERP_DEV_SOLUTIONS_DIR` (it wins for the same folder).
 
-**Installation** (administrators only):
+**Installation** (administrators only, after the initial password change):
 - **first sign-in** — after the password change the administrator sees "Which solutions to install?": packages with
   checkboxes and a schema for each; "Install selected" or "Skip" (`pgerp.settings`, key `solutions_setup` — the dialog is
   shown once);
@@ -867,8 +868,9 @@ schema of a new solution, the installed version) → release files with greater 
 **Clean installation.** The “Drop schema” checkbox in the installation window (after a confirmation) reinstalls a solution
 from scratch: `pgerp.solution_reset` deletes its forms, actions, reports, roles, menu folder and releases, and drops its
 schema with all tables and data (`DROP SCHEMA … CASCADE`; in `public` — only the solution's objects); then all releases
-of the package are applied, in the same transaction. It also helps when a schema is left over from an earlier installation
-(for example, after a clean start that dropped only `pgerp` and `public`). Translations and users stay.
+of the package are applied, in the same transaction. For a solution that is not installed the schema must be missing or empty: a schema with
+objects may hold other data, so it is never dropped. A schema left over from an earlier installation (for example, after
+a clean start that dropped only `pgerp` and `public`) is dropped manually. Translations and users stay.
 
 **Clean start (development).** To start from scratch on a particular database — when the data does not matter and
 losing it is fine — run on that database:
@@ -916,7 +918,8 @@ docker compose logs -f app
 docker compose down               # stop; data stays in the db-data volume (down -v deletes it)
 ```
 
-Compose settings — environment variables or an `.env` file next to `compose.yaml`: `ERP_PORT` (port on the host,
+Compose settings — environment variables or an `.env` file next to `compose.yaml`: `ERP_BIND` (host address, default `127.0.0.1` —
+this computer only; `0.0.0.0` — all interfaces, after the admin password is changed), `ERP_PORT` (port on the host,
 default `8099`; inside the container the application listens on `8080`), `ERP_DB_PASSWORD` (default `postgres`), `ERP_CONTEXT_PATH`, `ERP_ALLOWED_ORIGINS`,
 `ERP_MCP_ALLOWED_ORIGINS`. The database port is not published; uncomment `ports` of the `db` service to connect with psql.
 The image alone: `docker build -t pgerp .`, then `docker run -p 8080:8080 -e ERP_DB_URL=… -e ERP_DB_PASSWORD=… pgerp`.
@@ -965,6 +968,9 @@ location /erp/ {
 |---|---|---|
 | JVM | <nobr>`./mvnw package`</nobr> | <nobr>`target/pgerp-<version>.jar`</nobr>, run with <nobr>`java -jar`</nobr> |
 | Docker image | <nobr>`docker build -t pgerp .`</nobr> | Image on JRE 25 (`Dockerfile`) |
+
+`.github/scripts/db_smoke.py` checks the built jar on a real PostgreSQL in CI and before a release is published: a fresh
+installation and an upgrade from 0.2.1, in temporary databases.
 
 Tests need PostgreSQL with an `erp` database (`ERP_DB_URL`, `ERP_DB_USER`, `ERP_DB_PASSWORD`); without one, package with
 `-DskipTests`.

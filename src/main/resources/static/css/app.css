@@ -209,6 +209,20 @@ h2, h3 {
 	font-weight: 400;
 }
 
+/* Версия приложения рядом с логотипом; на узком экране места для неё нет */
+.topbar-version {
+	align-self: center;
+	color: var(--muted);
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+@media (max-width: 1000px) {
+	.topbar-version {
+		display: none;
+	}
+}
+
 /* Каркас: шапка сверху, под ней меню форм слева (отделено линией) и рабочая область */
 .shell {
 	display: flex;

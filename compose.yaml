@@ -38,7 +38,8 @@ services:
       ERP_ALLOWED_ORIGINS: ${ERP_ALLOWED_ORIGINS:-}
       ERP_MCP_ALLOWED_ORIGINS: ${ERP_MCP_ALLOWED_ORIGINS:-}
     ports:
-      - "${ERP_PORT:-8099}:8080"
+      # Только этот компьютер: первый вход — admin / admin. Доступ из сети — ERP_BIND=0.0.0.0, сменив пароль admin
+      - "${ERP_BIND:-127.0.0.1}:${ERP_PORT:-8099}:8080"
 
 volumes:
   db-data:

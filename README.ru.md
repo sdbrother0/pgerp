@@ -21,11 +21,14 @@ docker compose up -d
 ```
 
 Образ `ghcr.io/sdbrother0/pgerp` скачивается из GitHub Container Registry. Конкретная версия вместо последней —
-`ERP_VERSION=0.2.1 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
+`ERP_VERSION=0.2.2 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
 из исходников (в клоне репозитория) — `docker compose up -d --build`.
 
 Откройте http://localhost:8099 и войдите как **admin / admin** (при первом входе пароль нужно сменить). Затем
 администратор выбирает решения для установки: в комплекте CRM и примеры.
+
+Приложение доступно только с этого компьютера. Чтобы открыть его в сеть, сначала смените пароль admin, затем
+запустите `ERP_BIND=0.0.0.0 docker compose up -d` (или впишите `ERP_BIND=0.0.0.0` в `.env`).
 
 Начать с чистого листа — удалить контейнеры вместе с базой (том `db-data`; все данные будут потеряны) и запустить
 заново:
