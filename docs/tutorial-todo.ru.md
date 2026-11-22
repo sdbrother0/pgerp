@@ -22,6 +22,7 @@
 | 8–9 | Меню, Роли | пункт меню и роль <nobr>`todo_user`</nobr> |
 | 10–11 | Приложение, консоль | проверка |
 | 12 | Решения | выпуск — файл пакета решения |
+| — | Доступ MCP | [то же силами ИИ-агента](#то-же--силами-ии-агента-mcp) |
 
 ## Как это работает (коротко)
 
@@ -375,8 +376,9 @@ INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label
 
 ## То же — силами ИИ-агента (MCP)
 
-Всё перечисленное доступно агенту через MCP-сервер приложения. **Доступ MCP → «Выдать токен»**, затем в
-Claude Code:
+Всё перечисленное доступно агенту через MCP-сервер приложения. Как выдать токен и подключить Claude Code — по шагам
+в [руководстве по счетам, шаг 0](tutorial-invoices.ru.md#0-подключение-mcp); коротко: **Доступ MCP → «Выдать токен»**
+(пользователь — администратор, начальный пароль должен быть сменён), затем в Claude Code:
 
 ```bash
 claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <токен>"
@@ -392,3 +394,16 @@ claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Author
 Агент прочитает справочник платформы (<nobr>`platform_guide`</nobr>) и выполнит те же шаги инструментами
 <nobr>`solution_save`</nobr>, <nobr>`table_save`</nobr>, <nobr>`view_save`</nobr>, <nobr>`function_save`</nobr>, <nobr>`form_save`</nobr>, <nobr>`grid_columns_save`</nobr>, <nobr>`sql_run`</nobr>,
 <nobr>`menu_save`</nobr>, <nobr>`role_set`</nobr>, <nobr>`action_run`</nobr>, <nobr>`release_preview`</nobr>. Результат открывается в том же редакторе.
+
+| Шаг | Инструмент MCP |
+|---|---|
+| 2. Решение | <nobr>`solution_save`</nobr> |
+| 3. Таблица | <nobr>`table_save`</nobr>: сначала <nobr>`apply: false`</nobr> — показать SQL, затем <nobr>`apply: true`</nobr> |
+| 4. Представление | <nobr>`view_save`</nobr> |
+| 5–6. Функции кнопок и источник таблицы | <nobr>`function_save`</nobr> |
+| 5–6. Карточка и список | <nobr>`form_save`</nobr>; колонки таблицы — <nobr>`grid_columns_save`</nobr> |
+| 7. Кнопки в строках | <nobr>`sql_run`</nobr> — тот же скрипт, что в консоли |
+| 8. Меню | <nobr>`menu_get`</nobr>, затем <nobr>`menu_save`</nobr> — меню **целиком** с новыми пунктами |
+| 9. Права | <nobr>`role_set`</nobr> |
+| 11. Проверка | <nobr>`action_run`</nobr> с <nobr>`user`</nobr> — от имени пользователя с ролью, с откатом |
+| 12. Выпуск | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — когда вы попросите |

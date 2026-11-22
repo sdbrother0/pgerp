@@ -9,6 +9,8 @@
 администратор). Здесь мы соберём то же самое с нуля. Следующий шаг — полноценное приложение с таблицей, списком и
 правами: [список дел с нуля](tutorial-todo.ru.md).
 
+![Готовый пример после перевода](img/hello/ru/09-app-translated.png)
+
 | Шаг | Где | Что создаём |
 |---|---|---|
 | 1 | Вход | редактор форм |
@@ -18,6 +20,7 @@
 | 5 | Меню | пункт меню |
 | 6 | Приложение | проверка |
 | 7 | Переводы | «Hello, %s» на другом языке |
+| — | Доступ MCP | [то же силами ИИ-агента](#то-же--через-mcp) |
 
 ## Как это работает
 
@@ -50,6 +53,8 @@
 
 «Сохранить», затем выберите **Решение: Greeting** в боковой панели.
 
+![Решение Greeting](img/hello/ru/01-solution.png)
+
 > Почему не <nobr>`hello_`</nobr>: встроенный пример уже занимает имена <nobr>`hello_world`</nobr> и
 > <nobr>`hello_run`</nobr>.
 
@@ -64,6 +69,8 @@
 | Кнопка | <nobr>`btn_run`</nobr> | Say hello | <nobr>`greet_hello_run`</nobr> — создадим на следующем шаге |
 
 **Имя поля** — ключ, под которым его значение придёт в функцию: <nobr>`p_data->>'user_name'`</nobr>.
+
+![Форма в редакторе](img/hello/ru/02-form.png)
 
 > Исходный язык платформы — английский, поэтому подписи пишем по-английски, а на русский переводим на шаге 7.
 
@@ -96,10 +103,14 @@ END;
 «Сохранить» в окне кода: база создаст функцию и зарегистрирует действие — оно сразу станет действием кнопки. Ошибка
 компиляции показывается в окне. Затем «Сохранить» форму.
 
+![Код кнопки](img/hello/ru/03-function.png)
+
 ## 5. Меню
 
 **Меню → «+ Пункт»** — заголовок «Greeting» (папка); **«+ Подпункт»** — «Hello World», форма
 <nobr>`greet_hello`</nobr>. «Сохранить».
+
+![Меню](img/hello/ru/04-menu.png)
 
 Администратор видит все формы. Чтобы дать форму другим пользователям, добавьте её в роль в **Администрирование →
 Роли** — см. [шаг 9 примера со списком дел](tutorial-todo.ru.md#9-права).
@@ -110,8 +121,14 @@ END;
 «Say hello» — появится окно «Hello, Анна». Нажмите кнопку с пустым полем — будет «Enter a name»: это
 <nobr>`ui_require`</nobr>.
 
+![Сообщение](img/hello/ru/05-app-message.png)
+
+![Проверка ввода](img/hello/ru/06-app-error.png)
+
 То же без интерфейса: **SQL-консоль → «Проверка действия»**, действие <nobr>`greet_hello_run`</nobr>, данные
 <nobr>`{"user_name": "Анна"}`</nobr> — в ответе видна инструкция <nobr>`show_message`</nobr>.
+
+![Проверка действия](img/hello/ru/07-action-test.png)
 
 ## 7. Перевод
 
@@ -125,13 +142,62 @@ END;
 | Enter a name | Введите имя |
 | Hello, %s | Привет, %s |
 
+![Без перевода](img/hello/ru/08-translations.png)
+
 Переключите язык в шапке: форма и сообщение теперь по-русски — «Привет, Анна». Подстановка <nobr>`%s`</nobr> должна
 остаться в переводе. Если решение «Примеры» установлено, «Enter a name» и «Hello, %s» уже переведены — встроенный
 пример использует те же тексты.
 
+![Приветствие на русском](img/hello/ru/09-app-translated.png)
+
+## То же — через MCP
+
+Всё это может сделать ИИ-агент через MCP-сервер приложения. Как выдать токен и подключить Claude Code — по шагам
+в [руководстве по счетам, шаг 0](tutorial-invoices.ru.md#0-подключение-mcp); коротко: **Доступ MCP → «Выдать токен»**
+(пользователь — администратор, начальный пароль должен быть сменён), затем
+
+```bash
+claude mcp add --transport http pgerp http://localhost:8080/mcp --header "Authorization: Bearer <токен>"
+```
+
+и попросите, например:
+
+> Создай в PgERP решение greet «Greeting» (префикс greet_, папка меню Greeting): форма greet_hello «Hello World»
+> с полем user_name «Your name» и кнопкой «Say hello», которая показывает «Hello, <имя>», а без имени — ошибку
+> «Enter a name»; пункт меню Greeting → Hello World; русские переводы. Проверь действие через action_run.
+
+Шаги руководства и инструменты, которыми их выполнит агент:
+
+| Шаг | Инструмент MCP |
+|---|---|
+| 2. Решение | <nobr>`solution_save`</nobr> |
+| 3. Форма | <nobr>`form_save`</nobr> — форма целиком, со всеми компонентами |
+| 4. Код кнопки | <nobr>`function_save`</nobr> — функция и действие; до формы, потому что форма ссылается на действие |
+| 5. Меню | <nobr>`menu_get`</nobr>, затем <nobr>`menu_save`</nobr> — меню **целиком** с новым пунктом |
+| 6. Проверка | <nobr>`action_run`</nobr> — как кнопка формы, с откатом |
+| 7. Перевод | <nobr>`translation_save`</nobr> — по одному тексту |
+
+Так выглядят вызовы (имя инструмента и аргументы; этот пример ими собран и проверен):
+
+```
+solution_save {"name": "greet", "title": "Greeting", "is_new": true, "prefix": "greet_", "menu_folder": "Greeting"}
+function_save {"name": "greet_hello_run", "description": "Greeting by name", "is_new": true, "body": "DECLARE\n    v_name VARCHAR := ui_text(p_data, 'user_name');\nBEGIN\n    PERFORM ui_require(v_name IS NOT NULL, ui_t('Enter a name'));\n    RETURN ui_ok(ui_message(format(ui_t('Hello, %s'), v_name)));\nEND;"}
+form_save {"name": "greet_hello", "title": "Hello World", "folder": "Greeting", "components": [{"type": "input", "name": "user_name", "label": "Your name"}, {"type": "button", "name": "btn_run", "label": "Say hello", "action": "greet_hello_run"}]}
+menu_get {}
+menu_save {"items": [ …пункты из menu_get…, {"title": "Greeting", "items": [{"title": "Hello World", "form": "greet_hello"}]}]}
+translation_save {"lang": "ru", "source": "Your name", "translation": "Имя"}
+translation_save {"lang": "ru", "source": "Say hello", "translation": "Поздороваться"}
+translation_save {"lang": "ru", "source": "Enter a name", "translation": "Введите имя"}
+translation_save {"lang": "ru", "source": "Hello, %s", "translation": "Привет, %s"}
+action_run {"action": "greet_hello_run", "data": {"user_name": "Anna"}}
+```
+
+Ответ <nobr>`action_run`</nobr> — инструкция <nobr>`show_message`</nobr> «Hello, Anna»; для пользователя с русским языком — «Привет, Anna».
+Агент начинает с <nobr>`platform_guide`</nobr>: там правила платформы и формат форм. Результат открывается в том же редакторе.
+
 ## Дальше
 
 - [Список дел с нуля](tutorial-todo.ru.md) — таблица, список с поиском, кнопки в строках, права и выпуск пакета
-- [Счета на товары и услуги](tutorial-invoices.ru.md) — документ со строками (master-detail), окна выбора, итоги, статусы, переводы, MCP
   решения.
+- [Счета на товары и услуги](tutorial-invoices.ru.md) — документ со строками (master-detail), окна выбора, итоги, статусы, переводы, MCP
 - [ARCHITECTURE.ru.md](../ARCHITECTURE.ru.md) — все функции <nobr>`ui_*`</nobr> и устройство платформы.

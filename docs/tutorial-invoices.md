@@ -7,6 +7,10 @@ totals with VAT, statuses and permissions. The main topic is **master-detail**: 
 table of its lines (the details), which are edited in a separate form and update the card total right away. The solution
 depends on nothing: neither CRM nor the examples are needed.
 
+> The finished result ships with the application — the **Billing** package (<nobr>`billing`</nobr>, prefix
+> <nobr>`bill_`</nobr>, role <nobr>`bill_accountant`</nobr>): "Solutions → Install solutions". Its names differ so that the package and the
+> solution built with this guide (<nobr>`invoices`</nobr>, <nobr>`inv_`</nobr>) do not get in each other's way and can be compared.
+
 The basics — table, card, list, row buttons, menu, role, release — are covered in detail in the
 [to-do list](tutorial-todo.md); here they are brief, and what a document with lines needs is explained in more depth.
 
@@ -64,16 +68,18 @@ A ready-made request for the agent is [at the end](#the-same-with-an-ai-agent-mc
 ## How master-detail works
 
 ```
-Invoice card inv_invoice (master)                   Invoice line inv_line (details)
-┌──────────────────────────────────────┐            ┌──────────────────────────┐
-│ id (hidden) ──────────┐              │            │ invoice_id (hidden)      │
-│ Number, date, customer │             │   opens     │ Goods or service [...]   │
-│ [Add line] ────────────┼─────────────┼──────────► │ Quantity, price, VAT     │
-│ ┌ inv_lines_grid ──────▼─────┐       │            │ [Save]                   │
-│ │ Master: id → master_id     │ ◄─────┼────────────┤  refresh_grid +          │
-│ └────────────────────────────┘       │            │  set_values(total,       │
-│ Total: … ◄───────────────────────────┼────────────┤    p_form => 'inv_invoice')
-└──────────────────────────────────────┘            └──────────────────────────┘
+ Invoice card inv_invoice (master)          Invoice line inv_line (details)
+┌────────────────────────────────────┐     ┌────────────────────────────────┐
+│ id (hidden)                        │     │ invoice_id (hidden)            │
+│ Number, date, customer             │     │ Goods or service [...]         │
+│                                    │     │ Quantity, price, VAT           │
+│ [Add line]                         │---->│                                │
+│                                    │     │ [Save]                         │
+│ Table inv_lines_grid,              │<----│ ui_refresh_grid                │
+│   Master = id -> master_id         │     │                                │
+│ Total: ...                         │<----│ ui_set_values(..., p_form =>   │
+│                                    │     │   'inv_invoice')               │
+└────────────────────────────────────┘     └────────────────────────────────┘
 ```
 
 - **Details table.** The lines table in the card has the **"Master"** property = <nobr>`id`</nobr> — the name of a card field.
@@ -1084,6 +1090,23 @@ Connect the agent (step 0) and ask, for example:
 > with a lines table (the master property) and a total; a line is a separate form with an item lookup that fills the
 > price and VAT. Only a draft can be changed. Role inv_accountant, a menu, Russian translations. Test the actions with
 > action_run on behalf of a user with the role and show release_preview.
+
+The guide's steps and the tools the agent uses for them:
+
+| Step | MCP tool |
+|---|---|
+| 1. Solution | <nobr>`solution_save`</nobr> |
+| 2. Tables | <nobr>`table_save`</nobr>: first <nobr>`apply: false`</nobr> — show the SQL, then <nobr>`apply: true`</nobr> |
+| 3. Views | <nobr>`view_save`</nobr> |
+| 4, 6, 7. Code | <nobr>`sql_run`</nobr> — the same scripts, or <nobr>`function_save`</nobr> — one action at a time |
+| 5–8. Forms | <nobr>`form_save`</nobr> — the whole form; the details table property — <nobr>`"master": "id"`</nobr> |
+| 9. Columns | <nobr>`grid_columns_save`</nobr> |
+| 10. Row buttons | <nobr>`sql_run`</nobr> |
+| 11. Menu | <nobr>`menu_get`</nobr>, then <nobr>`menu_save`</nobr> — the **whole** menu with the new folder |
+| 12. Permissions | <nobr>`role_set`</nobr> |
+| 13. Translations | <nobr>`translation_save`</nobr> or a script via <nobr>`sql_run`</nobr>; check — <nobr>`translation_list`</nobr> with <nobr>`missing: true`</nobr> |
+| 14–15. Testing | <nobr>`action_run`</nobr> with <nobr>`user`</nobr> — on behalf of the accountant, rolled back |
+| 16. Release | <nobr>`release_preview`</nobr>; <nobr>`release_create`</nobr> — when you ask for it |
 
 The agent starts with <nobr>`platform_guide`</nobr> and goes through the same steps with the tools <nobr>`solution_save`</nobr>, <nobr>`table_save`</nobr>,
 <nobr>`view_save`</nobr>, <nobr>`sql_run`</nobr>, <nobr>`function_save`</nobr>, <nobr>`form_save`</nobr>, <nobr>`grid_columns_save`</nobr>, <nobr>`menu_save`</nobr>,
