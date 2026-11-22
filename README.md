@@ -58,6 +58,7 @@ Settings (database address, port, path behind a reverse proxy, MCP) are environm
   MCP server, authentication, translations, themes, migrations and solution packages, deployment
 - [docs/tutorial-hello.md](docs/tutorial-hello.md) — the first step: Hello World, a form with a name field and a button
 - [docs/tutorial-todo.md](docs/tutorial-todo.md) — step by step: a to-do list application from scratch in the editor
+- [docs/tutorial-invoices.md](docs/tutorial-invoices.md) — step by step: invoices for goods and services, a document with lines (master-detail), connecting MCP
 
 ## License
 
