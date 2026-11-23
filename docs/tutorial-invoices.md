@@ -209,6 +209,93 @@ The foreign key from lines to the invoice is <nobr>`ON DELETE CASCADE`</nobr>: a
 the item is <nobr>`RESTRICT`</nobr>: an item used in an invoice cannot be deleted. Price and VAT rate are stored in the line rather
 than taken from the catalogue — changing an item's price does not change invoices already issued.
 
+All five tables in SQL — for reference or to run in the SQL console (in this order, because of the foreign keys):
+
+```sql
+CREATE TABLE inv_customers (
+    id      bigserial PRIMARY KEY,
+    name    varchar(200) NOT NULL UNIQUE CHECK (trim(name) <> ''),
+    tax_id  varchar(20),
+    address text,
+    email   varchar(200)
+);
+
+CREATE TABLE inv_items (
+    id       bigserial PRIMARY KEY,
+    name     varchar(200)  NOT NULL UNIQUE,
+    kind     varchar(10)   NOT NULL DEFAULT 'goods' CHECK (kind IN ('goods', 'service')),
+    unit     varchar(20)   NOT NULL DEFAULT 'pcs',
+    price    numeric(14,2) NOT NULL DEFAULT 0 CHECK (price >= 0),
+    vat_rate numeric(5,2)  NOT NULL DEFAULT 20 CHECK (vat_rate BETWEEN 0 AND 100)
+);
+
+CREATE TABLE inv_invoices (
+    id           bigserial PRIMARY KEY,
+    number       varchar(30) NOT NULL UNIQUE,
+    invoice_date date        NOT NULL DEFAULT current_date,
+    due_date     date,
+    customer_id  bigint      NOT NULL REFERENCES inv_customers (id) ON DELETE RESTRICT,
+    status       varchar(10) NOT NULL DEFAULT 'draft'
+                 CHECK (status IN ('draft', 'issued', 'paid', 'cancelled')),
+    notes        text,
+    created_by   varchar(50) NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    CHECK (due_date IS NULL OR due_date >= invoice_date)
+);
+CREATE INDEX inv_invoices_customer_id_idx ON inv_invoices (customer_id);
+CREATE INDEX inv_invoices_invoice_date_idx ON inv_invoices (invoice_date);
+
+CREATE TABLE inv_invoice_lines (
+    id         bigserial PRIMARY KEY,
+    invoice_id bigint        NOT NULL REFERENCES inv_invoices (id) ON DELETE CASCADE,
+    item_id    bigint        NOT NULL REFERENCES inv_items (id) ON DELETE RESTRICT,
+    quantity   numeric(14,3) NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    price      numeric(14,2) NOT NULL CHECK (price >= 0),
+    vat_rate   numeric(5,2)  NOT NULL CHECK (vat_rate BETWEEN 0 AND 100)
+);
+CREATE INDEX inv_invoice_lines_invoice_id_idx ON inv_invoice_lines (invoice_id);
+CREATE INDEX inv_invoice_lines_item_id_idx ON inv_invoice_lines (item_id);
+
+CREATE TABLE inv_invoice_snapshots (
+    invoice_id bigint      PRIMARY KEY REFERENCES inv_invoices (id) ON DELETE CASCADE,
+    state      jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE inv_customers IS 'Customers (payers)';
+COMMENT ON COLUMN inv_customers.name IS 'Name';
+COMMENT ON COLUMN inv_customers.tax_id IS 'Tax ID';
+COMMENT ON COLUMN inv_customers.address IS 'Address';
+COMMENT ON COLUMN inv_customers.email IS 'E-mail';
+
+COMMENT ON TABLE inv_items IS 'Goods and services';
+COMMENT ON COLUMN inv_items.name IS 'Name';
+COMMENT ON COLUMN inv_items.kind IS 'goods or service';
+COMMENT ON COLUMN inv_items.unit IS 'Unit of measure';
+COMMENT ON COLUMN inv_items.price IS 'Price without VAT';
+COMMENT ON COLUMN inv_items.vat_rate IS 'VAT, %';
+
+COMMENT ON TABLE inv_invoices IS 'Invoices (master)';
+COMMENT ON COLUMN inv_invoices.number IS 'Invoice number';
+COMMENT ON COLUMN inv_invoices.invoice_date IS 'Invoice date';
+COMMENT ON COLUMN inv_invoices.due_date IS 'Pay by';
+COMMENT ON COLUMN inv_invoices.customer_id IS 'Customer';
+COMMENT ON COLUMN inv_invoices.status IS 'draft, issued, paid, cancelled';
+COMMENT ON COLUMN inv_invoices.notes IS 'Notes';
+COMMENT ON COLUMN inv_invoices.created_by IS 'Author login';
+
+COMMENT ON TABLE inv_invoice_lines IS 'Invoice lines (details)';
+COMMENT ON COLUMN inv_invoice_lines.invoice_id IS 'Invoice';
+COMMENT ON COLUMN inv_invoice_lines.item_id IS 'Goods or service';
+COMMENT ON COLUMN inv_invoice_lines.quantity IS 'Quantity';
+COMMENT ON COLUMN inv_invoice_lines.price IS 'Price without VAT';
+COMMENT ON COLUMN inv_invoice_lines.vat_rate IS 'VAT, %';
+
+COMMENT ON TABLE inv_invoice_snapshots IS 'Saved state of an invoice open in its card; state NULL — created in the card';
+COMMENT ON COLUMN inv_invoice_snapshots.invoice_id IS 'Invoice';
+COMMENT ON COLUMN inv_invoice_snapshots.state IS 'Header and lines when the card was opened; NULL — a new invoice';
+```
+
 ![Designer: invoice lines](img/invoices/en/02-table-lines.png)
 
 ## 3. Views

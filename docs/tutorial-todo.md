@@ -82,6 +82,28 @@ mark is already there. Add columns with "+ Column":
 
 In "Indexes" add an index on <nobr>`owner_login, due_on`</nobr> — the list is always selected by owner and due date.
 
+The same table in SQL — for reference or to run in the SQL console:
+
+```sql
+CREATE TABLE todo_tasks (
+    id          bigserial PRIMARY KEY,
+    title       varchar(200) NOT NULL,
+    notes       text,
+    due_on      date,
+    done        boolean      NOT NULL DEFAULT false,
+    owner_login varchar(50)  NOT NULL,
+    created_at  timestamptz  NOT NULL DEFAULT now()
+);
+CREATE INDEX todo_tasks_owner_login_due_on_idx ON todo_tasks (owner_login, due_on);
+
+COMMENT ON TABLE todo_tasks IS 'To-do list tasks';
+COMMENT ON COLUMN todo_tasks.title IS 'What to do';
+COMMENT ON COLUMN todo_tasks.notes IS 'Notes';
+COMMENT ON COLUMN todo_tasks.due_on IS 'Due date';
+COMMENT ON COLUMN todo_tasks.done IS 'Done';
+COMMENT ON COLUMN todo_tasks.owner_login IS 'Whose task';
+```
+
 ![Table designer](img/todo/en/03-table-designer.png)
 
 "Save" shows the SQL that will be executed — check it and press "Apply".
