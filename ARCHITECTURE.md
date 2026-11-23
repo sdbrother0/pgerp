@@ -700,7 +700,7 @@ erDiagram
 | <nobr>`pgerp.languages`</nobr> | Languages: code, title, <nobr>`is_source`</nobr> — the source language (one), <nobr>`is_default`</nobr> — the default (one), order in the switcher |
 | <nobr>`pgerp.translations`</nobr> | Translations: language, source text → translation; <nobr>`is_template`</nobr> — a source text with placeholders |
 | <nobr>`pgerp.grid_columns`</nobr> | Table source columns: field, title, cell type (<nobr>`text`</nobr>, <nobr>`number`</nobr>, <nobr>`money`</nobr>, <nobr>`datetime`</nobr>, <nobr>`badge`</nobr>), sort column (<nobr>`NULL`</nobr> — no sorting). Edited in the form editor: table properties → "Columns…" |
-| <nobr>`pgerp.menu_items`</nobr> | The application menu: items of any depth (<nobr>`parent_id`</nobr>), order <nobr>`sort_order`</nobr>, the item's form (optional; when the form is deleted the item stays without it) |
+| <nobr>`pgerp.menu_items`</nobr> | The application menu: items of any depth (<nobr>`parent_id`</nobr>), order <nobr>`sort_order`</nobr> (core folders — Administration — always first), the item's form (optional; when the form is deleted the item stays without it) |
 | <nobr>`pgerp.grid_row_actions`</nobr> | Buttons in table rows: action, label, style <nobr>`default`</nobr> / <nobr>`danger`</nobr> |
 
 ## Core functions

@@ -692,7 +692,7 @@ erDiagram
 | <nobr>`pgerp.languages`</nobr> | Языки: код, название, <nobr>`is_source`</nobr> — исходный (один), <nobr>`is_default`</nobr> — по умолчанию (один), порядок в переключателе |
 | <nobr>`pgerp.translations`</nobr> | Переводы: язык, исходный текст → перевод; <nobr>`is_template`</nobr> — исходный текст с плейсхолдерами |
 | <nobr>`pgerp.grid_columns`</nobr> | Колонки источника таблицы: поле, заголовок, тип ячейки (<nobr>`text`</nobr>, <nobr>`number`</nobr>, <nobr>`money`</nobr>, <nobr>`datetime`</nobr>, <nobr>`badge`</nobr>), колонка сортировки (<nobr>`NULL`</nobr> — без сортировки). Правится в редакторе форм: свойства таблицы → «Колонки…» |
-| <nobr>`pgerp.menu_items`</nobr> | Меню приложения: пункты с произвольной вложенностью (<nobr>`parent_id`</nobr>), порядок <nobr>`sort_order`</nobr>, форма пункта (необязательна; при удалении формы пункт остаётся без неё) |
+| <nobr>`pgerp.menu_items`</nobr> | Меню приложения: пункты с произвольной вложенностью (<nobr>`parent_id`</nobr>), порядок <nobr>`sort_order`</nobr> (папки ядра — «Администрирование» — всегда первыми), форма пункта (необязательна; при удалении формы пункт остаётся без неё) |
 | <nobr>`pgerp.grid_row_actions`</nobr> | Кнопки в строках таблицы: действие, подпись, стиль <nobr>`default`</nobr> / <nobr>`danger`</nobr> |
 
 ## Функции ядра
