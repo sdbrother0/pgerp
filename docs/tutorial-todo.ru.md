@@ -82,6 +82,28 @@
 
 В блоке «Индексы» добавьте индекс <nobr>`owner_login, due_on`</nobr> — список всегда выбирается по владельцу и сроку.
 
+Та же таблица на SQL — для сверки или для запуска в SQL-консоли:
+
+```sql
+CREATE TABLE todo_tasks (
+    id          bigserial PRIMARY KEY,
+    title       varchar(200) NOT NULL,
+    notes       text,
+    due_on      date,
+    done        boolean      NOT NULL DEFAULT false,
+    owner_login varchar(50)  NOT NULL,
+    created_at  timestamptz  NOT NULL DEFAULT now()
+);
+CREATE INDEX todo_tasks_owner_login_due_on_idx ON todo_tasks (owner_login, due_on);
+
+COMMENT ON TABLE todo_tasks IS 'Задачи списка дел';
+COMMENT ON COLUMN todo_tasks.title IS 'Что сделать';
+COMMENT ON COLUMN todo_tasks.notes IS 'Заметки';
+COMMENT ON COLUMN todo_tasks.due_on IS 'Срок';
+COMMENT ON COLUMN todo_tasks.done IS 'Сделано';
+COMMENT ON COLUMN todo_tasks.owner_login IS 'Чья задача';
+```
+
 ![Конструктор таблицы](img/todo/ru/03-table-designer.png)
 
 «Сохранить» показывает SQL, который будет выполнен, — проверьте и нажмите «Применить».
