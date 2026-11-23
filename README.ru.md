@@ -22,7 +22,7 @@ docker compose up -d
 ```
 
 Образ `ghcr.io/sdbrother0/pgerp` скачивается из GitHub Container Registry. Конкретная версия вместо последней —
-`ERP_VERSION=0.4.2 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
+`ERP_VERSION=0.4.3 docker compose up -d`, обновление — `docker compose pull && docker compose up -d`. Собрать образ
 из исходников (в клоне репозитория) — `docker compose up -d --build`.
 
 Версии, описание изменений и jar: [GitHub Releases](https://github.com/sdbrother0/pgerp/releases).
