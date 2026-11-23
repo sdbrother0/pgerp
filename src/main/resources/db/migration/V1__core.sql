@@ -1137,15 +1137,17 @@ RETURNS JSONB AS $$
 $$ LANGUAGE sql STABLE;
 
 -- p_forms — формы, которые показываются (NULL — все). Пункт с недоступной формой остаётся группой, если
--- в нём есть доступные подпункты; пустые группы скрываются.
+-- в нём есть доступные подпункты; пустые группы скрываются. Папки ядра («Администрирование») — всегда первыми,
+-- папки решений — после них в своём порядке.
 CREATE FUNCTION pgerp.ui_menu_level(p_parent BIGINT, p_forms VARCHAR[])
 RETURNS JSON AS $$
 BEGIN
     RETURN COALESCE((
         SELECT json_agg(json_build_object('id', t.id, 'title', t.title, 'form', t.form, 'items', t.items)
-                        ORDER BY t.sort_order, t.id)
+                        ORDER BY t.core DESC, t.sort_order, t.id)
         FROM (
             SELECT m.id, m.title, m.sort_order,
+                   (p_parent IS NULL AND pgerp.core_has('menu', m.title)) AS core,
                    CASE WHEN p_forms IS NULL OR m.form_name = ANY (p_forms) THEN m.form_name END AS form,
                    pgerp.ui_menu_level(m.id, p_forms) AS items
             FROM pgerp.menu_items m
@@ -5744,7 +5746,7 @@ INSERT INTO pgerp.grid_row_actions (source_action, sort_order, row_action, label
     ('users_page',               1, 'user_edit_open',           'Edit',  'default');
 
 INSERT INTO pgerp.menu_items (id, parent_id, sort_order, title, form_name) VALUES
-    (17, NULL, 3, 'Administration', NULL),
+    (17, NULL, 1, 'Administration', NULL),
     (18, 17,   1, 'Users',      'users'),
     (19, 17,   2, 'Roles',              'roles'),
     (20, 17,   3, 'Translations',          'translations');
